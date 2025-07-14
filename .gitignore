@@ -1,0 +1,7 @@
+# Ignore data folder
+data/
+
+# Ignore experiments folder
+exp/
+
+runs/
