@@ -7,25 +7,35 @@
 
 CONFIG="configs/rnb.yaml"
 DATASET_NAME="RNb"
+
+ROOT_DIR="./data/"
 SCENE="buddha_sdm"
 TAG="rgbplus_opti_lights"
-VAL_INTERVAL=5000
+
+VAL_INTERVAL=1000
 MAX_STEPS=20000
-NORMAL_LOSS=1.0
 NUM_VIEWS=20
+
 NO_ALBEDO="false"
+APPLY_LIGHT_OPTI="true"
+APPLY_RGB_PLUS="true"
+
 
 python launch.py \
         --config "$CONFIG" \
         --gpu 0 \
-        --train dataset.scene="$SCENE" \
+        --train \
+        root_dir: $ROOT_DIR/$SCENE\
+        dataset.scene="$SCENE" \
         tag="$TAG" \
+        dataset.name="$DATASET_NAME" \
+        dataset.num_views=$NUM_VIEWS \
+        dataset.apply_light_opti: $APPLY_LIGHT_OPTI \
+        dataset.apply_rgb_plus: $APPLY_RGB_PLUS \
         trainer.val_check_interval=$VAL_INTERVAL \
         trainer.max_steps=$MAX_STEPS \
-        dataset.name="$DATASET_NAME" \
         model.background_color=black \
-        dataset.num_views=$NUM_VIEWS \
-        system.loss.lambda_normal_l1=$NORMAL_LOSS \
-        system.loss.lambda_normal_cos=$NORMAL_LOSS \
         model.no_albedo=$NO_ALBEDO \
+        
+        
         
