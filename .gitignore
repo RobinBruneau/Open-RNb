@@ -6,3 +6,4 @@ exp/
 
 # Ignore runs folder
 runs/
+/runs/
