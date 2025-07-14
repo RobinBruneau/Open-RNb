@@ -4,4 +4,5 @@ data/
 # Ignore experiments folder
 exp/
 
+# Ignore runs folder
 runs/
