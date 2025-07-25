@@ -91,16 +91,16 @@ system:
   optimizer:
     name: AdamW
     args:
-      lr: 0.01
+      lr: 0.001
       betas: [0.9, 0.99]
       eps: 1.e-15
     params:
       geometry:
-        lr: 0.01
-      texture:
-        lr: 0.01
-      variance:
         lr: 0.001
+      texture:
+        lr: 0.001
+      variance:
+        lr: 0.0001
   warmup_steps: 500
   scheduler:
     name: SequentialLR
