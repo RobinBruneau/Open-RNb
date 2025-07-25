@@ -36,7 +36,7 @@ model:
     grad_type: analytic
     isosurface:
       method: mc
-      resolution: 720
+      resolution: 512
       chunk: 2097152
       threshold: 0.
     xyz_encoding_config:
