@@ -434,22 +434,27 @@ class NeuSSystem(BaseSystem):
         #            param.requires_grad = True
 
         if self.config.dataset.apply_rgb_plus:
-            loss_rendering_mse = F.mse_loss(out['comp_rendering_plus_mse_full'][out['rays_valid_full'][...,0]], batch['rendering_plus_mse'][out['rays_valid_full'][...,0]])
-            self.log('train/loss_rgb_mse', loss_rendering_mse* self.C(self.config.system.loss.lambda_rendering_mse))
-            loss += loss_rendering_mse * self.C(self.config.system.loss.lambda_rendering_mse)
 
-            loss_rendering_l1 = F.l1_loss(out['comp_rendering_plus_l1_full'][out['rays_valid_full'][...,0]], batch['rendering_plus_l1'][out['rays_valid_full'][...,0]])
-            self.log('train/loss_rgb', loss_rendering_l1* self.C(self.config.system.loss.lambda_rendering_l1))
-            loss += loss_rendering_l1 * self.C(self.config.system.loss.lambda_rendering_l1)
+            if self.C(self.config.system.loss.lambda_rendering_mse) > 0.0:
+                loss_rendering_mse = F.mse_loss(out['comp_rendering_plus_mse_full'][out['rays_valid_full'][...,0]], batch['rendering_plus_mse'][out['rays_valid_full'][...,0]])
+                self.log('train/loss_rgb_mse', loss_rendering_mse* self.C(self.config.system.loss.lambda_rendering_mse))
+                loss += loss_rendering_mse * self.C(self.config.system.loss.lambda_rendering_mse)
+
+            if self.C(self.config.system.loss.lambda_rendering_l1) > 0.0:
+                loss_rendering_l1 = F.l1_loss(out['comp_rendering_plus_l1_full'][out['rays_valid_full'][...,0]], batch['rendering_plus_l1'][out['rays_valid_full'][...,0]])
+                self.log('train/loss_rgb', loss_rendering_l1* self.C(self.config.system.loss.lambda_rendering_l1))
+                loss += loss_rendering_l1 * self.C(self.config.system.loss.lambda_rendering_l1)
 
         else:
-            loss_rendering_mse = F.mse_loss(out['comp_rendering_full'][out['rays_valid_full'][...,0]], batch['rendering'][out['rays_valid_full'][...,0]])
-            self.log('train/loss_rgb_mse', loss_rendering_mse* self.C(self.config.system.loss.lambda_rendering_mse))
-            loss += loss_rendering_mse * self.C(self.config.system.loss.lambda_rendering_mse)
+            if self.C(self.config.system.loss.lambda_rendering_mse) > 0.0:
+                loss_rendering_mse = F.mse_loss(out['comp_rendering_full'][out['rays_valid_full'][...,0]], batch['rendering'][out['rays_valid_full'][...,0]])
+                self.log('train/loss_rgb_mse', loss_rendering_mse* self.C(self.config.system.loss.lambda_rendering_mse))
+                loss += loss_rendering_mse * self.C(self.config.system.loss.lambda_rendering_mse)
 
-            loss_rendering_l1 = F.l1_loss(out['comp_rendering_full'][out['rays_valid_full'][...,0]], batch['rendering'][out['rays_valid_full'][...,0]])
-            self.log('train/loss_rgb', loss_rendering_l1 * self.C(self.config.system.loss.lambda_rendering_l1))
-            loss += loss_rendering_l1 * self.C(self.config.system.loss.lambda_rendering_l1)
+            if self.C(self.config.system.loss.lambda_rendering_l1) > 0.0:
+                loss_rendering_l1 = F.l1_loss(out['comp_rendering_full'][out['rays_valid_full'][...,0]], batch['rendering'][out['rays_valid_full'][...,0]])
+                self.log('train/loss_rgb', loss_rendering_l1 * self.C(self.config.system.loss.lambda_rendering_l1))
+                loss += loss_rendering_l1 * self.C(self.config.system.loss.lambda_rendering_l1)
 
         
 
