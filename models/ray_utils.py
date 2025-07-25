@@ -15,6 +15,7 @@ def get_ray_directions(W, H, fx, fy, cx, cy, use_pixel_centers=True):
     )
     i, j = torch.from_numpy(i), torch.from_numpy(j)
 
+    
     directions = torch.stack([(i - cx) / fx, -(j - cy) / fy, -torch.ones_like(i)], -1) # (H, W, 3)
 
     return directions

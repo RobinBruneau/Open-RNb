@@ -171,7 +171,8 @@ class RNbDatasetBase():
             P = (world_mat @ scale_mat)[:3,:4]
             K, c2w = load_K_Rt_from_P(P)
             fx, fy, cx, cy = K[0,0] * self.factor, K[1,1] * self.factor, K[0,2] * self.factor, K[1,2] * self.factor
-            directions = get_ray_directions(w, h, fx, fy, cx, cy)
+            #print(fx,fy,cx,cy)
+            directions = get_ray_directions(w, h, fx, fy, cx, cy, use_pixel_centers=True)
             self.directions.append(directions)
             
             c2w = torch.from_numpy(c2w).float()
@@ -204,7 +205,7 @@ class RNbDatasetBase():
             normals = normals[:,:,:3]
             normals = torch.nn.functional.normalize(normals, p=2, dim=-1)
             #all_normals_cam.append(normals)
-            normals = torch.matmul(normals, c2w_[:3,:3].T)
+            #normals = torch.matmul(normals, c2w_[:3,:3].T)
             boolean_mask = mask > 0.5 # Shape (H, W), boolean tensor
             boolean_mask_expanded = boolean_mask.unsqueeze(-1).expand_as(normals)
             normals[~boolean_mask_expanded] = 0.0

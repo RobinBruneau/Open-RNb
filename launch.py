@@ -45,6 +45,7 @@ def main():
     from utils.misc import load_config    
 
     # parse YAML config to OmegaConf
+
     config = load_config(args.config, cli_args=extras)
     config.cmd_args = vars(args)
 

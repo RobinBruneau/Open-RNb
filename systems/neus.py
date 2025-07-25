@@ -8,22 +8,31 @@ from pytorch_lightning.utilities.rank_zero import rank_zero_info, rank_zero_debu
 import numpy as np
 import models
 from models.utils import cleanup
+from systems.utils import MAE_tensor
 from models.ray_utils import get_rays
 import systems
 from systems.base import BaseSystem
 from systems.criterions import PSNR, binary_cross_entropy
+from models.neus import CameraPoseOptimizer
 
-def gen_light_directions(R_c2w,index_light,normal_world=None):
+def gen_light_directions(index_light,normal=None):
         
 
 
     # Define base tilt and slant angles for the light sources in a canonical frame.
     # Convert degrees to radians using torch.deg2rad
-    tilt = torch.deg2rad(torch.tensor([0., 120., 240.], device='cuda')) # Azimuth angles for 3 lights
+    #tilt = torch.deg2rad(torch.tensor([0., 120., 240.], device='cuda')) # Azimuth angles for 3 lights
+    random_values_0_to_1 = torch.rand(3, device="cuda")
+
+    # 2. Scale these values to be between 0 and 360
+    random_angles_degrees = random_values_0_to_1 * 360.0
+
+    # 3. Convert these random angles from degrees to radians using torch.deg2rad
+    tilt = torch.deg2rad(random_angles_degrees)
     
     # Slant angles (zenith angles) for light sources.
     # Ensure these are float tensors and on the correct device.
-    slant_val = 30. if normal_world is None else 54.74
+    slant_val = 30. if normal is None else 54.74
     slant = torch.deg2rad(torch.tensor([slant_val, slant_val, slant_val], device='cuda'))
 
     # Convert spherical coordinates (slant, tilt) to Cartesian coordinates (x, y, z)
@@ -35,9 +44,8 @@ def gen_light_directions(R_c2w,index_light,normal_world=None):
         torch.cos(slant)
     ], dim=0) # Shape: (3, n_lights)
 
-    if normal_world is not None:
+    if normal is not None:
         
-        normal = torch.matmul(normal_world,R_c2w)
         
         outer_prod = torch.einsum('...j,...k->...jk', normal, normal) # Shape: (N, 3, 3)
         U = torch.linalg.svd(outer_prod).U # U: (N, 3, 3)
@@ -66,15 +74,11 @@ def gen_light_directions(R_c2w,index_light,normal_world=None):
     
     selected_light_direction = light_directions[index_light]
 
-    #print(selected_light_direction.shape)
-    light_directions_world = None
-    if normal_world is None: 
-        light_directions_world = torch.matmul(selected_light_direction,R_c2w.permute(1, 0))
-        light_directions_world = light_directions_world.unsqueeze(0) # Output shape: (1, 3)
-    else: 
-        light_directions_world = torch.matmul(selected_light_direction,R_c2w.permute(1, 0))
     
-    return light_directions_world
+    if normal is None: 
+        selected_light_direction = selected_light_direction.unsqueeze(0) # Output shape: (1, 3)
+
+    return selected_light_direction
 
 
 @systems.register('neus-system')
@@ -91,14 +95,112 @@ class NeuSSystem(BaseSystem):
         self.train_num_samples = self.config.model.train_num_rays * (self.config.model.num_samples_per_ray + self.config.model.get('num_samples_per_ray_bg', 0))
         self.train_num_rays = self.config.model.train_num_rays
 
+
+    def setup(self, stage=None):
+        super().setup(stage) # Call parent setup, which should initialize self.model
+
+        # Access the dataset from the DataModule
+        # self.trainer.datamodule.train_dataset holds the actual training dataset object
+        current_dataset = self.trainer.datamodule.train_dataset # MODIFIED LINE
+
+        
+        if not hasattr(current_dataset, 'all_c2w') or current_dataset.all_c2w is None:
+            raise ValueError("Dataset must provide 'all_c2w' for camera pose optimization.")
+
+        initial_c2w_matrices = current_dataset.all_c2w.to(self.device)
+        self.camera_pose_optimizer = CameraPoseOptimizer(
+            num_images=len(initial_c2w_matrices),
+            initial_c2w_matrices=initial_c2w_matrices
+        )
+
+        if not self.config.system.optimize_camera_poses:
+            for param in self.camera_pose_optimizer.parameters():
+                    param.requires_grad = False
+        
+
+        # Store a reference to the dataset for consistent access in other methods
+        # This is good practice if you need dataset properties like H, W, etc.
+        self.dataset = current_dataset # ADDED LINE for consistency with preprocess_data
+
+
+
+
+    def configure_optimizers(self):
+        # Récupérer la sortie de l'optimiseur de la classe parente
+        base_optim_output = super().configure_optimizers()
+
+        # Assurez-vous que base_optim_output est un dictionnaire contenant 'optimizer'
+        if isinstance(base_optim_output, dict) and 'optimizer' in base_optim_output:
+            main_optimizer = base_optim_output['optimizer']
+            # Vous pouvez aussi récupérer le scheduler ici si nécessaire
+            # main_scheduler_config = base_optim_output.get('lr_scheduler')
+        elif isinstance(base_optim_output, torch.optim.Optimizer):
+            main_optimizer = base_optim_output
+            base_optim_output = {'optimizer': main_optimizer} # Pour normaliser la sortie
+        else:
+            raise TypeError(f"Unexpected return type from super().configure_optimizers(): {type(base_optim_output)}. Expected a dict with 'optimizer' or an Optimizer instance.")
+
+        # Si l'optimisation des poses est activée, ajouter les paramètres de la caméra à un nouveau groupe
+        
+        if self.camera_pose_optimizer is None:
+            raise RuntimeError("camera_pose_optimizer not initialized but optimize_camera_poses is True.")
+
+        # Ajouter les paramètres de la caméra à un nouveau groupe dans l'optimiseur principal
+        main_optimizer.add_param_group({
+            'params': self.camera_pose_optimizer.parameters(),
+            'lr': self.config.system.pose_lr,
+            'name': 'camera_poses' # Donnez un nom pour la clarté
+        })
+
+        # Retourner la configuration de l'optimiseur principal (qui contient maintenant les paramètres de la caméra)
+        # S'il y avait un scheduler dans base_optim_output, il sera toujours là.
+        return base_optim_output
+
+
     def forward(self, batch):
-        return self.model(batch['rays'],batch['lights'])
+
+        '''
+        # Get the learnable camera-to-world matrices for the current batch of rays
+        if self.config.system.optimize_camera_poses: # ADDITION
+            c2w_matrices = self.camera_pose_optimizer(batch['index'])
+            c2w_matrices = c2w_matrices[:,:3,:]
+        else: # ADDITION
+            # Use initial c2w from dataset if not optimizing poses
+            c2w_matrices = self.dataset.all_c2w[batch['index']].to(self.device) # ADDITION
+        '''
+
+        #c2w_matrices = self.camera_pose_optimizer(batch['index'])
+        #c2w_matrices = c2w_matrices[:,:3,:]
+
+        c2w_matrices = self.dataset.all_c2w[batch['index']].to(self.device)
+
+
+        
+        rays_o,rays_d = get_rays(batch['directions'],c2w_matrices)
+
+        if c2w_matrices.shape[0] == 1 :
+            c2w_matrices = c2w_matrices.repeat(batch['lights'].shape[0], 1, 1)
+
+
+        rays = torch.cat([rays_o, rays_d], dim=-1) # (N_rays, 6)
+
+        R2w = c2w_matrices[:,:3,:3].permute(0,2,1)
+        lights_world = torch.einsum('ni,nij->nj', batch['lights'], R2w)
+        
+
+
+        # Pass the world-space rays and the c2w_matrices to the model
+        return self.model(rays, lights_world, c2w_matrices, batch["fg_mask"].bool())
+
     
     def preprocess_data(self, batch, stage):
 
         # Get dataset instance directly from trainer for clarity and access to pre-loaded data
         dataset = self.dataset
         index_light = torch.randint(0, 3, (1,)).item()
+        #print("\n\n")
+        #print(index_light)
+        
 
         if stage in ['train']:
             # For training, randomly pick an image index and a random light index per batch
@@ -128,7 +230,7 @@ class NeuSSystem(BaseSystem):
                 directions = dataset.directions[y, x]
             elif dataset.directions.ndim == 4: # (N, H, W, 3)
                 directions = dataset.directions[index, y, x]
-            rays_o, rays_d = get_rays(directions, c2w)
+            #rays_o, rays_d = get_rays(directions, c2w)
             rgb = dataset.all_images[index, y, x].view(-1, dataset.all_images.shape[-1]).to(self.rank)
             if self.config.model.no_albedo : 
                 rgb = torch.ones_like(rgb)
@@ -142,9 +244,10 @@ class NeuSSystem(BaseSystem):
             #print(normals.shape)
             #print("\n\n")
             if self.config.dataset.apply_light_opti:
-                lights = gen_light_directions(c2w[0,:3,:3],index_light,normals)
+                lights = gen_light_directions(index_light,normals)
             else : 
-                lights = gen_light_directions(c2w[0,:3,:3],index_light)
+                lights = gen_light_directions(index_light)
+                #print(lights)
 
 
             if not self.config.dataset.apply_light_opti:
@@ -171,9 +274,11 @@ class NeuSSystem(BaseSystem):
             # For test, 'index_light' is provided in the batch.
             if stage == 'test':
                 light_idx = batch['index_light'][0].item()
+                index_light = light_idx
             else: # val stage
                 # For validation, pick the first light condition (index 0) for consistency
                 light_idx = 0
+                index_light = 0
 
             # --- Data Retrieval based on img_idx and light_idx ---
             c2w = dataset.all_c2w[img_idx]
@@ -182,7 +287,7 @@ class NeuSSystem(BaseSystem):
             elif dataset.directions.ndim == 4: # (N, H, W, 3)
                 directions = dataset.directions[img_idx] # Directions specific to this image
             
-            rays_o, rays_d = get_rays(directions, c2w)
+            #rays_o, rays_d = get_rays(directions, c2w)
             rgb = dataset.all_images[img_idx].view(-1, dataset.all_images.shape[-1]).to(self.rank)
 
             if self.config.model.no_albedo : 
@@ -194,9 +299,9 @@ class NeuSSystem(BaseSystem):
 
 
             if self.config.dataset.apply_light_opti:
-                lights = gen_light_directions(c2w[:,:3],index_light,normals)
+                lights = gen_light_directions(index_light,normals)
             else : 
-                lights = gen_light_directions(c2w[:,:3],index_light)
+                lights = gen_light_directions(index_light)
 
 
             if not self.config.dataset.apply_light_opti:
@@ -220,8 +325,9 @@ class NeuSSystem(BaseSystem):
                 batch.update({'index_light': torch.tensor([light_idx], dtype=torch.long, device=self.rank)})
 
         # Common batch updates for both stages
-        rays = torch.cat([rays_o, F.normalize(rays_d, p=2, dim=-1)], dim=-1)
-        batch.update({'rays': rays})
+        #rays = torch.cat([rays_o, F.normalize(rays_d, p=2, dim=-1)], dim=-1)
+        batch.update({'directions': directions})
+        torch.clamp(rgb,0.0,1.0)
 
         plus_mse = torch.sqrt(3.0 - (rgb[...,0]**2 + rgb[...,1]**2 + rgb[...,2]**2)).unsqueeze(-1)
         plus_l1 = 3.0 - (rgb[...,0] + rgb[...,1] + rgb[...,2]).unsqueeze(-1)
@@ -236,6 +342,7 @@ class NeuSSystem(BaseSystem):
             rendering = torch.einsum('i,ij->ij', shading, batch['rgb'])
             rendering_plus_mse = torch.einsum('i,ij->ij', shading, rgb_plus_mse)
             rendering_plus_l1 = torch.einsum('i,ij->ij', shading, rgb_plus_l1)
+                
         else:
             # Fallback if normals are not available, or handle error as per your design
             rendering = batch['rgb'] # Or some default/error
@@ -265,12 +372,9 @@ class NeuSSystem(BaseSystem):
                 'normals': normals,
             })
         
-        if hasattr(self.dataset, 'all_depths'):
-            batch.update({
-                'depths': depths,
-            })
         
     def training_step(self, batch, batch_idx):
+
         out = self(batch)
         loss = 0.
 
@@ -325,34 +429,68 @@ class NeuSSystem(BaseSystem):
         self.log('train/loss_rgb', loss_rgb_l1)
         loss += loss_rgb_l1 * self.C(self.config.system.loss.lambda_rgb_l1)        
         '''
+        #if self.global_step > 5000:
+        #    for param in self.camera_pose_optimizer.parameters():
+        #            param.requires_grad = True
 
         if self.config.dataset.apply_rgb_plus:
             loss_rendering_mse = F.mse_loss(out['comp_rendering_plus_mse_full'][out['rays_valid_full'][...,0]], batch['rendering_plus_mse'][out['rays_valid_full'][...,0]])
-            self.log('train/loss_rgb_mse', loss_rendering_mse)
+            self.log('train/loss_rgb_mse', loss_rendering_mse* self.C(self.config.system.loss.lambda_rendering_mse))
             loss += loss_rendering_mse * self.C(self.config.system.loss.lambda_rendering_mse)
 
             loss_rendering_l1 = F.l1_loss(out['comp_rendering_plus_l1_full'][out['rays_valid_full'][...,0]], batch['rendering_plus_l1'][out['rays_valid_full'][...,0]])
-            self.log('train/loss_rgb', loss_rendering_l1)
+            self.log('train/loss_rgb', loss_rendering_l1* self.C(self.config.system.loss.lambda_rendering_l1))
             loss += loss_rendering_l1 * self.C(self.config.system.loss.lambda_rendering_l1)
 
         else:
             loss_rendering_mse = F.mse_loss(out['comp_rendering_full'][out['rays_valid_full'][...,0]], batch['rendering'][out['rays_valid_full'][...,0]])
-            self.log('train/loss_rgb_mse', loss_rendering_mse)
+            self.log('train/loss_rgb_mse', loss_rendering_mse* self.C(self.config.system.loss.lambda_rendering_mse))
             loss += loss_rendering_mse * self.C(self.config.system.loss.lambda_rendering_mse)
 
             loss_rendering_l1 = F.l1_loss(out['comp_rendering_full'][out['rays_valid_full'][...,0]], batch['rendering'][out['rays_valid_full'][...,0]])
-            self.log('train/loss_rgb', loss_rendering_l1)
+            self.log('train/loss_rgb', loss_rendering_l1 * self.C(self.config.system.loss.lambda_rendering_l1))
             loss += loss_rendering_l1 * self.C(self.config.system.loss.lambda_rendering_l1)
 
+        
+
+
+        # AJOUT DE LA RÉGULARISATION DIFFÉRENCIÉE POUR LES POSES
+        if self.config.system.optimize_camera_poses:
+            # Récupérer les poids de régularisation spécifiques, avec fallback sur lambda_pose_reg si non définis
+            lambda_pose_reg_trans = self.C(self.config.system.loss.get('lambda_pose_reg_trans', self.config.system.loss.get('lambda_pose_reg', 0.0)))
+            lambda_pose_reg_rot = self.C(self.config.system.loss.get('lambda_pose_reg_rot', self.config.system.loss.get('lambda_pose_reg', 0.0)))
+
+            if lambda_pose_reg_trans > 0 or lambda_pose_reg_rot > 0:
+                delta_logmap = self.camera_pose_optimizer.delta_se3_logmap
+
+                # Séparer les composantes de translation (3 premières) et de rotation (3 dernières)
+                delta_trans = delta_logmap[:, :3]  # (N_images, 3)
+                delta_rot = delta_logmap[:, 3:]   # (N_images, 3)
+
+                loss_pose_reg_trans = (delta_trans**2).mean()
+                loss_pose_reg_rot = (delta_rot**2).mean()
+
+                if lambda_pose_reg_trans > 0:
+                    self.log('train/loss_pose_reg_trans', loss_pose_reg_trans* lambda_pose_reg_trans)
+                    loss += loss_pose_reg_trans * lambda_pose_reg_trans
+
+                if lambda_pose_reg_rot > 0:
+                    self.log('train/loss_pose_reg_rot', loss_pose_reg_rot* lambda_pose_reg_rot)
+                    loss += loss_pose_reg_rot * lambda_pose_reg_rot
+        # FIN DE L'AJOUT DE LA RÉGULARISATION DIFFÉRENCIÉE
+
+
+
         loss_eikonal = ((torch.linalg.norm(out['sdf_grad_samples'], ord=2, dim=-1) - 1.)**2).mean()
-        self.log('train/loss_eikonal', loss_eikonal)
+        self.log('train/loss_eikonal', loss_eikonal* self.C(self.config.system.loss.lambda_eikonal))
         loss += loss_eikonal * self.C(self.config.system.loss.lambda_eikonal)
         
         opacity = torch.clamp(out['opacity'].squeeze(-1), 1.e-3, 1.-1.e-3)
         loss_mask = binary_cross_entropy(opacity, batch['fg_mask'].float())
-        self.log('train/loss_mask', loss_mask)
+        self.log('train/loss_mask', loss_mask* (self.C(self.config.system.loss.lambda_mask) if self.dataset.has_mask else 0.0))
         loss += loss_mask * (self.C(self.config.system.loss.lambda_mask) if self.dataset.has_mask else 0.0)
 
+        '''
         loss_opaque = binary_cross_entropy(opacity, opacity)
         self.log('train/loss_opaque', loss_opaque)
         loss += loss_opaque * self.C(self.config.system.loss.lambda_opaque)
@@ -366,7 +504,7 @@ class NeuSSystem(BaseSystem):
             loss_curvature = out['sdf_laplace_samples'].abs().mean()
             self.log('train/loss_curvature', loss_curvature)
             loss += loss_curvature * self.C(self.config.system.loss.lambda_curvature)
-
+        
         # distortion loss proposed in MipNeRF360
         # an efficient implementation from https://github.com/sunset1995/torch_efficient_distloss
         if self.C(self.config.system.loss.lambda_distortion) > 0:
@@ -378,7 +516,7 @@ class NeuSSystem(BaseSystem):
             loss_distortion_bg = flatten_eff_distloss(out['weights_bg'], out['points_bg'], out['intervals_bg'], out['ray_indices_bg'])
             self.log('train/loss_distortion_bg', loss_distortion_bg)
             loss += loss_distortion_bg * self.C(self.config.system.loss.lambda_distortion_bg)        
-
+        '''
         losses_model_reg = self.model.regularizations(out)
         for name, value in losses_model_reg.items():
             self.log(f'train/loss_{name}', value)
@@ -386,12 +524,25 @@ class NeuSSystem(BaseSystem):
             loss += loss_
         
         self.log('train/inv_s', out['inv_s'], prog_bar=True)
+        self.log('train/loss', loss)
 
         for name, value in self.config.system.loss.items():
             if name.startswith('lambda'):
                 self.log(f'train_params/{name}', self.C(value))
 
         self.log('train/num_rays', float(self.train_num_rays), prog_bar=True)
+
+        if self.global_step >= 100000 :
+            self.config.dataset.apply_light_opti = True
+
+        if self.global_step == 19900:
+            self.export()
+
+        if torch.isnan(loss):
+            print(loss_rendering_mse)
+            print(loss_rendering_l1)
+            print(loss_mask)
+            print(loss_eikonal)
 
         return {
             'loss': loss
@@ -414,11 +565,25 @@ class NeuSSystem(BaseSystem):
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
         W, H = self.dataset.img_wh
 
-        rgb = out['comp_rgb_full'].to("cpu")
-        normals = out['comp_normal'].to("cpu")
-        lights = batch['lights'].to("cpu")
-        shading = torch.einsum('ij,ij->i', normals, lights)
-        rendering = torch.einsum('i,ij->ij', shading, rgb)
+        c2w = self.dataset.all_c2w[batch['index']].to('cpu')
+        #print(c2w.shape)
+        normals_w = out['comp_normal'].to("cpu")
+        normals = torch.matmul(normals_w, c2w.squeeze(0)[:3,:3])
+        #print(normals.shape)
+
+        MAE = MAE_tensor(batch['normals'],normals,batch["fg_mask"])
+
+        rendering_gt = batch['rendering'].to("cpu")
+        rendering_pred = out['comp_rendering'].to("cpu")
+
+        diff = rendering_gt-rendering_pred
+
+        diff_abs = torch.abs(diff).sum(dim=1,keepdim=True)
+        diff_square = (diff**2).sum(dim=1,keepdim=True)
+        diff_abs = diff_abs / torch.max(diff_abs)
+        #print(diff_abs.shape)
+
+        diff_abs = diff_abs.expand(-1,3)
 
         if 'depths' in batch:
             depths = batch['depths'].clone().view(H, W)
@@ -426,11 +591,13 @@ class NeuSSystem(BaseSystem):
         self.save_image_grid(f"it{self.global_step}-{batch['index'][0].item()}.png", [[
             {'type': 'rgb', 'img': batch['rendering'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
             {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': batch['normals'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
+            {'type': 'rgb', 'img': batch['normals'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}},
+            {'type': 'rgb', 'img': MAE.view(H, W, 3), 'kwargs': {'data_format': 'HWC'}}
         ],[
-            {'type': 'rgb', 'img': rendering.view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': rgb.view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}},
+            {'type': 'rgb', 'img': out['comp_rendering'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+            {'type': 'rgb', 'img': out['comp_rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+            {'type': 'rgb', 'img': normals.view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}},
+            {'type': 'rgb', 'img': diff_abs.view(H, W, 3), 'kwargs': {'data_format': 'HWC'}}
         ]])
         #print(batch['depths'].max(), batch['depths'].min(), out['depth'].max(), out['depth'].min())
 
@@ -439,6 +606,7 @@ class NeuSSystem(BaseSystem):
             'index': batch['index']
         }
           
+        
     
     """
     # aggregate outputs from different devices when using DP
@@ -463,6 +631,7 @@ class NeuSSystem(BaseSystem):
 
     def test_step(self, batch, batch_idx):
         
+        '''
         out = self(batch)
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
         W, H = self.dataset.img_wh
@@ -482,6 +651,8 @@ class NeuSSystem(BaseSystem):
             'psnr': psnr,
             'index': batch['index']
         }
+        '''
+        return {}
               
     
     def test_epoch_end(self, out):
@@ -489,8 +660,9 @@ class NeuSSystem(BaseSystem):
         Synchronize devices.
         Generate image sequence using test outputs.
         """
-        
+        '''
         out = self.all_gather(out)
+        
         if self.trainer.is_global_zero:
             out_set = {}
             for step_out in out:
@@ -503,8 +675,8 @@ class NeuSSystem(BaseSystem):
                         out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
             psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
             self.log('test/psnr', psnr, prog_bar=True, rank_zero_only=True)    
-
-            self.export()
+        '''
+        self.export()
     
     def export(self):
         mesh = self.model.export(self.config.export)

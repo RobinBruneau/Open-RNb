@@ -10,7 +10,75 @@ from models.utils import chunk_batch
 from systems.utils import update_module_step
 from nerfacc import ContractionType, OccupancyGrid, ray_marching, render_weight_from_density, render_weight_from_alpha, accumulate_along_rays
 from nerfacc.intersection import ray_aabb_intersect
+import kornia.geometry.conversions as kornia_geo # Import kornia for matrix-to-quaternion conversion
 
+from lietorch import SE3,SO3 # Use SE3 for rigid transformations
+
+class CameraPoseOptimizer(nn.Module):
+    def __init__(self, num_images, initial_c2w_matrices):
+        super().__init__()
+        self.num_images = num_images
+
+        self.delta_se3_logmap = nn.Parameter(torch.zeros(num_images, 6))
+
+        # --- Pre-compute initial SE3 data and store it as a buffer ---
+        initial_R = initial_c2w_matrices[:, :3, :3]
+        #initial_R = initial_c2w_matrices[:, :3, :3].transpose(-1, -2)
+        initial_T = initial_c2w_matrices[:, :3, 3]
+
+        # 1. Convertir la matrice de rotation 3x3 en quaternion (w, x, y, z) avec Kornia
+        kornia_quaternions = kornia_geo.rotation_matrix_to_quaternion(initial_R) # Forme : (num_images, 4) au format (w, x, y, z)
+
+        # AJOUT DU BRUIT ICI
+        quaternion_noise_std = -1#0.001
+        if quaternion_noise_std > 0:
+
+            rng_state = torch.get_rng_state()
+            torch.manual_seed(42)
+            # Générer du bruit gaussien de la même forme que les quaternions
+            noise = torch.randn_like(kornia_quaternions) * quaternion_noise_std
+            torch.set_rng_state(rng_state)
+
+            noisy_kornia_quaternions = kornia_quaternions + noise
+            # Très important : re-normaliser le quaternion après l'ajout de bruit
+            # pour qu'il reste un quaternion unitaire valide pour la rotation.
+            noisy_kornia_quaternions = F.normalize(noisy_kornia_quaternions, p=2, dim=-1)
+            quaternions_to_use = noisy_kornia_quaternions
+        else:
+            quaternions_to_use = kornia_quaternions
+        # FIN DE L'AJOUT DU BRUIT
+
+        # 2. Réordonner le quaternion de (w, x, y, z) à (x, y, z, w) pour Lietorch
+        initial_quaternions_lietorch_format = torch.cat([
+            quaternions_to_use[:, 1:4], # composantes x, y, z
+            quaternions_to_use[:, 0:1]  # composante w
+        ], dim=-1) # Forme : (num_images, 4) au format (x, y, z, w)
+
+
+        # 3. Concatenate translation and reordered quaternion to form the 7-element data vector for SE3
+        # SE3 expects data in the format: [tx, ty, tz, qx, qy, qz, qw]
+        initial_se3_data = torch.cat([initial_T, initial_quaternions_lietorch_format], dim=-1) # Shape: (num_images, 7)
+
+        # Store the raw tensor data in the buffer
+        self.register_buffer('initial_se3_data_buffer', initial_se3_data)
+
+
+    def forward(self, image_idx):
+        # Retrieve the raw tensor data from the buffer
+        initial_se3_data_batch = self.initial_se3_data_buffer[image_idx]
+
+        # Reconstruct the lietorch SE3 object from the data
+        initial_se3_batch = SE3(initial_se3_data_batch) # Reconstruct SE3 object here
+
+        delta_se3_logmap_batch = self.delta_se3_logmap[image_idx]
+
+        delta_transform = SE3.exp(delta_se3_logmap_batch)
+
+        corrected_se3 = initial_se3_batch * delta_transform
+
+        corrected_c2w_matrices = corrected_se3.matrix()
+
+        return corrected_c2w_matrices
 
 class VarianceNetwork(nn.Module):
     def __init__(self, config):
@@ -147,8 +215,11 @@ class NeuSModel(BaseModel):
         return alpha
 
     
-    def forward_(self, rays, lights):
+    def forward_(self, rays, lights, c2w, mask):
+        
+
         n_rays = rays.shape[0]
+
         rays_o, rays_d = rays[:, 0:3], rays[:, 3:6] # both (N_rays, 3)
 
         with torch.no_grad():
@@ -163,7 +234,8 @@ class NeuSModel(BaseModel):
                 cone_angle=0.0,
                 alpha_thre=0.0
             )
-        
+
+        #print("\n\n")
         ray_indices = ray_indices.long()
         t_origins = rays_o[ray_indices]
         t_dirs = rays_d[ray_indices]
@@ -175,11 +247,34 @@ class NeuSModel(BaseModel):
             sdf, sdf_grad, feature, sdf_laplace = self.geometry(positions, with_grad=True, with_feature=True, with_laplace=True)
         else:
             sdf, sdf_grad, feature = self.geometry(positions, with_grad=True, with_feature=True)
-        #normal = F.normalize(sdf_grad, p=2, dim=-1)
-        normal = sdf_grad
+        normal = F.normalize(sdf_grad, p=2, dim=-1)
+
+        if ray_indices.shape[0]> 0:
+            if torch.isnan(normal).any() : 
+                print("\n\nNan in normal\n\n")
+        #normal = sdf_grad
+
+
         alpha = self.get_alpha(sdf, normal, t_dirs, dists)[...,None]
+
         #rgb = self.texture(feature, t_dirs, normal)
-        rgb = self.texture(feature, normal)
+        
+        
+        if self.config.no_albedo : 
+            rgb = torch.ones_like(normal)
+        else:
+            rgb = self.texture(feature, normal)
+
+        if ray_indices.shape[0]> 0:
+            if torch.isnan(rgb).any() : 
+                print("\n\nNan in rgb\n\n")
+
+        torch.clamp(rgb,0.0,1.0)
+        #print(rgb)
+        if ray_indices.shape[0]> 0:
+            if torch.isnan(rgb).any() : 
+                print("\n\nNan in rgb\n\n")
+
         if self.config.no_albedo : 
                 rgb = torch.ones_like(rgb)
 
@@ -189,7 +284,22 @@ class NeuSModel(BaseModel):
         rgb_plus_mse = torch.cat([rgb, plus_mse], dim=-1)
         rgb_plus_l1 = torch.cat([rgb, plus_l1], dim=-1)
 
+        if ray_indices.shape[0]> 0:
+            if torch.isnan(rgb).any() : 
+                print("\n\nNan in rgb\n\n")
+
+        #print(normal.shape)
+        #print(c2w.shape)
+        #c2w_all = c2w[ray_indices]
+        #c2w_all = c2w_all[:,:,:3].permute(0, 2, 1)
         
+
+        # Unsqueeze normals_world to (M, 3, 1) for batch matrix multiplication
+        #normals_world_expanded = normal.unsqueeze(-1) # Shape: (M, 3, 1)
+
+        # Perform batch matrix multiplication
+        #normal = (c2w_all @ normals_world_expanded).squeeze(-1)        
+
         lights_rays = lights[ray_indices]
         shading = torch.einsum('ij,ij->i', normal, lights_rays)
         rendering = torch.einsum('i,ij->ij', shading, rgb)
@@ -197,18 +307,48 @@ class NeuSModel(BaseModel):
         rendering_plus_l1 = torch.einsum('i,ij->ij', shading, rgb_plus_l1)
 
 
+
+        if ray_indices.shape[0]> 0:
+            if torch.isnan(normal).any() : 
+                print("\n\nNan in normal\n\n")
+
+        if ray_indices.shape[0]> 0:
+            if torch.isnan(rgb).any() : 
+                print("Nan in rgb\n\n")
+
+
+
         weights = render_weight_from_alpha(alpha, ray_indices=ray_indices, n_rays=n_rays)
         opacity = accumulate_along_rays(weights, ray_indices, values=None, n_rays=n_rays)
         depth = accumulate_along_rays(weights, ray_indices, values=midpoints, n_rays=n_rays)
         comp_rgb = accumulate_along_rays(weights, ray_indices, values=rgb, n_rays=n_rays)
+        torch.clamp(comp_rgb,0.0,1.0)
+        if self.config.no_albedo : 
+                comp_rgb = torch.ones_like(comp_rgb)
         comp_rendering = accumulate_along_rays(weights, ray_indices, values=rendering, n_rays=n_rays)
         comp_rendering_plus_mse = accumulate_along_rays(weights, ray_indices, values=rendering_plus_mse, n_rays=n_rays)
         comp_rendering_plus_l1 = accumulate_along_rays(weights, ray_indices, values=rendering_plus_l1, n_rays=n_rays)
 
         comp_normal = accumulate_along_rays(weights, ray_indices, values=normal, n_rays=n_rays)
         #comp_normal = F.normalize(comp_normal, p=2, dim=-1)
+        #comp_normal_mask = comp_normal[mask]
+        #comp_normal_mask = F.normalize(comp_normal_mask, p=2, dim=-1)
+        #comp_normal[mask] = comp_normal_mask
 
-        
+        #comp_shading = torch.einsum('ij,ij->i', comp_normal, lights)
+        #comp_rendering = torch.einsum('i,ij->ij', comp_shading, comp_rgb)
+
+        #comp_plus_mse = torch.sqrt(3.0 - (comp_rgb[...,0]**2 + comp_rgb[...,1]**2 + comp_rgb[...,2]**2)).unsqueeze(-1)
+        #comp_plus_l1 = 3.0 - (comp_rgb[...,0] + comp_rgb[...,1] + comp_rgb[...,2]).unsqueeze(-1)
+
+        #comp_rgb_plus_mse = torch.cat([comp_rgb, comp_plus_mse], dim=-1)
+        #comp_rgb_plus_l1 = torch.cat([comp_rgb, comp_plus_l1], dim=-1)
+
+        #comp_rendering_plus_mse = torch.einsum('i,ij->ij', comp_shading, comp_rgb_plus_mse)
+        #comp_rendering_plus_l1 = torch.einsum('i,ij->ij', comp_shading, comp_rgb_plus_l1)
+
+
+
         out = {
             'comp_rgb': comp_rgb,
             'comp_rendering': comp_rendering,
@@ -260,11 +400,12 @@ class NeuSModel(BaseModel):
             **{k + '_full': v for k, v in out_full.items()}
         }
 
-    def forward(self, rays, lights):
+    def forward(self, rays, lights, c2w, mask):
         if self.training:
-            out = self.forward_(rays, lights)
+            out = self.forward_(rays, lights, c2w, mask)
         else:
-            out = chunk_batch(self.forward_, self.config.ray_chunk, True, True, rays, lights)
+
+            out = chunk_batch(self.forward_, self.config.ray_chunk, True, True, rays, lights, c2w, mask)
         return {
             **out,
             'inv_s': self.variance.inv_s
@@ -296,3 +437,5 @@ class NeuSModel(BaseModel):
             rgb = self.texture(feature, normal)
             mesh['v_rgb'] = rgb.cpu()
         return mesh
+    
+    

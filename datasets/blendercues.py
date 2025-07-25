@@ -127,7 +127,7 @@ class BlenderCuesDatasetBase():
             self.all_normals = self.all_normals[::jump]
             self.directions = self.directions[::jump]
 
-        print("\n\n"+str(len(self.all_normals))+"\n\n")
+        #print("\n\n"+str(len(self.all_normals))+"\n\n")
         self.all_c2w, self.all_images, self.all_fg_masks = \
             torch.stack(self.all_c2w, dim=0).float().to(self.rank), \
             torch.stack(self.all_images, dim=0).float().to(self.rank), \

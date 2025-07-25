@@ -10,8 +10,6 @@ dataset:
   train_split: "train"
   val_split: "val"
   test_split: "test"
-  apply_light_opti: true
-  apply_rgb_plus: true
 
 model:
   name: neus
@@ -75,9 +73,10 @@ model:
 system:
   name: neus-system
   render_all_lights: true
+  pose_lr: 1.e-6
   loss:
-    lambda_rendering_mse: 0.
-    lambda_rendering_l1: 10.
+    lambda_rendering_mse: 50.
+    lambda_rendering_l1: 5.
     lambda_rgb_mse: 5.
     lambda_rgb_l1: 5.
     lambda_mask: 0.1
@@ -86,6 +85,8 @@ system:
     lambda_sparsity: 0.0
     lambda_distortion: 0.
     lambda_opaque: 0.
+    lambda_pose_reg_trans: 10.0 
+    lambda_pose_reg_rot: 10.0
     sparsity_scale: 1.
   optimizer:
     name: AdamW
@@ -126,7 +127,7 @@ export:
 
 trainer:
   max_steps: 20000
-  log_every_n_steps: 100
+  log_every_n_steps: 10
   num_sanity_val_steps: 0
   val_check_interval: 10000
   limit_train_batches: 1.0

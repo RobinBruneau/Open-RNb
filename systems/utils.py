@@ -5,6 +5,7 @@ from bisect import bisect_right
 import torch
 import torch.nn as nn
 from torch.optim import lr_scheduler
+import matplotlib.pyplot as plt 
 
 from pytorch_lightning.utilities.rank_zero import rank_zero_debug
 
@@ -349,3 +350,70 @@ def parse_scheduler(config, optimizer):
 def update_module_step(m, epoch, global_step):
     if hasattr(m, 'update_step'):
         m.update_step(epoch, global_step)
+
+
+def MAE_tensor(normal_map_1, normal_map_2, mask):
+
+    # Ensure inputs are on the same device
+    device = normal_map_1.device
+    normal_map_2 = normal_map_2.to(device)
+    mask = mask.to(device)
+
+    n1 = normal_map_1 * 2.0 - 1.0
+    n2 = normal_map_2 * 2.0 - 1.0
+
+    # Ensure mask is boolean
+    if mask.dtype != torch.bool:
+        mask = mask.bool()
+
+    n1_norm = torch.norm(n1, dim=1, keepdim=True)
+    n2_norm = torch.norm(n2, dim=1, keepdim=True)
+
+    n1 = n1 / (n1_norm + 1e-6)
+    n2 = n2 / (n2_norm + 1e-6)
+
+    dot_n = (n1 * n2).sum(dim=1)
+
+    dot_n = torch.clamp(dot_n, -1.0, 1.0)
+
+    geodesic_distance = torch.acos(dot_n)
+
+    # 5. Apply the mask for MAE score calculation
+    # We want to calculate MAE only where the mask is True.
+    MAE_score = torch.clone(geodesic_distance) # Create a copy to modify
+
+    # Pixels where mask is False should not contribute to the sum
+    # Set them to 0.0 before summing
+    MAE_score[~mask] = 0.0 # ~mask is logical NOT for boolean tensors
+    nb_valid_pixels = torch.sum(mask)
+    if nb_valid_pixels > 0:
+        MAE_mean_score = torch.sum(MAE_score) / nb_valid_pixels
+    else:
+        MAE_mean_score = torch.tensor(0.0, device=device) # No valid pixels, so MAE is 0
+
+    # 6. Prepare MAE image for visualization
+    # Clip geodesic_distance to [0, pi/4]
+    # torch.clamp is used again
+    geodesic_distance_viz = torch.clamp(geodesic_distance, 0.0, torch.pi / 4.0)
+
+    # Normalize for colormap (0.0 to 1.0)
+    geodesic_distance_viz = geodesic_distance_viz / (torch.pi / 4.0)
+
+    # Convert to NumPy for matplotlib colormap (matplotlib expects numpy arrays)
+    # Move to CPU and convert to numpy
+    geodesic_distance_viz_np = geodesic_distance_viz.detach().cpu().numpy()
+
+    # Apply colormap
+    # plt.cm.jet returns (H, W, 4) (RGBA), so slice to get RGB
+    MAE_image_np = plt.cm.jet(geodesic_distance_viz_np)[:,:3]
+
+    # Apply mask for visualization: invalid areas become white (1,1,1)
+    # Convert mask to numpy for direct indexing if needed, or broadcast.
+    mask_np = mask.detach().cpu().numpy()
+    MAE_image_np[~mask_np, :] = 1.0 # Set masked out areas to white
+
+    # Convert back to torch tensor
+    MAE_image = torch.from_numpy(MAE_image_np).to(device)
+
+
+    return MAE_image
