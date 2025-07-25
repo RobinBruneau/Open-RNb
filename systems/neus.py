@@ -676,7 +676,7 @@ class NeuSSystem(BaseSystem):
             psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
             self.log('test/psnr', psnr, prog_bar=True, rank_zero_only=True)    
         '''
-        self.export()
+        #self.export()
     
     def export(self):
         mesh = self.model.export(self.config.export)
