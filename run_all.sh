@@ -13,7 +13,7 @@ count=1
 
 for i in $(seq $count); do
     # Loop through each object
-    for ADD_05 in "${L_ADD_05[@]}";
+    for ADD_05 in "${L_ADD_05[@]}"; do
 
         if [ "$ADD_05" == "true" ]; then
             TAG="_05_"
