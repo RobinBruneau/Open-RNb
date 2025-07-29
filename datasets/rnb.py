@@ -172,7 +172,12 @@ class RNbDatasetBase():
             K, c2w = load_K_Rt_from_P(P)
             fx, fy, cx, cy = K[0,0] * self.factor, K[1,1] * self.factor, K[0,2] * self.factor, K[1,2] * self.factor
             #print(fx,fy,cx,cy)
-            directions = get_ray_directions(w, h, fx, fy, cx, cy, use_pixel_centers=False)
+            add_05 = self.config.add_05
+            print("\n\n")
+            print("add_05:")
+            print(add_05)
+            print("\n\n")
+            directions = get_ray_directions(w, h, fx, fy, cx, cy, use_pixel_centers=add_05)
             self.directions.append(directions)
             
             c2w = torch.from_numpy(c2w).float()

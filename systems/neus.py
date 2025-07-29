@@ -538,10 +538,10 @@ class NeuSSystem(BaseSystem):
         self.log('train/num_rays', float(self.train_num_rays), prog_bar=True)
 
 
-        if self.global_step%10000 == 0:
-            self.export()
+        #if self.global_step%10000 == 0:
+        #    self.export()
 
-        if self.global_step%199900 == 0:
+        if self.global_step%19990 == 0:
             self.export()
 
         if torch.isnan(loss):

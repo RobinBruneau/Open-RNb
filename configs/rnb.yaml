@@ -10,6 +10,7 @@ dataset:
   train_split: "train"
   val_split: "val"
   test_split: "test"
+  add_05: False
 
 model:
   name: neus
