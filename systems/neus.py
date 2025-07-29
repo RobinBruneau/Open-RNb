@@ -541,8 +541,9 @@ class NeuSSystem(BaseSystem):
         #if self.global_step%10000 == 0:
         #    self.export()
 
-        if self.global_step%19990 == 0:
-            self.export()
+        if self.global_step > 0 :
+            if self.global_step%19990 == 0:
+                self.export()
 
         if torch.isnan(loss):
             print(loss_rendering_mse)
