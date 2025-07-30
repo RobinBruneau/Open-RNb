@@ -238,7 +238,7 @@ class RNbDatasetBase():
 
                 mask_path = os.path.join(self.config.root_dir, 'mask', f'{i:03d}.png')
                 mask = Image.open(mask_path).convert('L') # (H, W, 1)
-                mask = mask.resize(self.img_wh, Image.BICUBIC)
+                #mask = mask.resize(self.img_wh, Image.BICUBIC)
                 mask = TF.to_tensor(mask)[0]
                 accumulated_mask = accumulated_mask + mask
             final_boolean_mask_for_bbox = accumulated_mask > 0.0 # Or > 0.5 if masks are strictly [0,1]
@@ -250,7 +250,7 @@ class RNbDatasetBase():
 
             mask_path = os.path.join(self.config.root_dir, 'mask', f'{i:03d}.png')
             mask = Image.open(mask_path).convert('L') # (H, W, 1)
-            mask = mask.resize(self.img_wh, Image.BICUBIC)
+            #mask = mask.resize(self.img_wh, Image.BICUBIC)
             mask = TF.to_tensor(mask)[0]
 
             world_mat, scale_mat = cams[f'world_mat_{i}'], cams[f'scale_mat_{i}']
@@ -270,7 +270,7 @@ class RNbDatasetBase():
 
             img_path = os.path.join(self.config.root_dir, 'albedo', f'{i:03d}.png')
             img = Image.open(img_path)
-            img = img.resize(self.img_wh, Image.BICUBIC)
+            #img = img.resize(self.img_wh, Image.BICUBIC)
             img = TF.to_tensor(img).permute(1, 2, 0)[...,:3]
             print(img.shape)
 
@@ -285,7 +285,7 @@ class RNbDatasetBase():
             #print(normals_base.shape)
             normal_path2 = os.path.join(self.config.root_dir, 'normal', f'{i:03d}.png')
             normals = Image.open(normal_path2)
-            normals = normals.resize(self.img_wh, Image.BICUBIC)
+            #normals = normals.resize(self.img_wh, Image.BICUBIC)
             normals = TF.to_tensor(normals).permute(1, 2, 0) # (4, h, w) => (h, w, 4)
             normals = normals.float() * 2.0 - 1.0
             normals = normals[:,:,:3]
