@@ -257,10 +257,6 @@ class RNbDatasetBase():
                 cx = cx - bbox_mask[0].item()
                 cy = cy - bbox_mask[1].item()
 
-            add_05 = self.config.add_05
-            directions = get_ray_directions(w, h, fx, fy, cx, cy, use_pixel_centers=add_05)
-            self.directions.append(directions)
-            
             c2w = torch.from_numpy(c2w).float()
             c2w_ = c2w.clone()
             c2w_[:3,1:3] *= -1. # flip input sign
@@ -309,7 +305,9 @@ class RNbDatasetBase():
                 self.h = mask.shape[0]
                 self.w = mask.shape[1]
 
-
+            add_05 = self.config.add_05
+            directions = get_ray_directions(w, h, fx, fy, cx, cy, use_pixel_centers=add_05)
+            self.directions.append(directions)
             
             self.all_fg_masks.append(mask) # (h, w)
             self.all_images.append(img[...,:3])
