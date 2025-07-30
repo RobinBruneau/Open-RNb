@@ -3,7 +3,7 @@
 # Define your lists of objects and methods
 OBJECTS=("bearPNG" "buddhaPNG" "cowPNG" "pot2PNG" "readingPNG") # Add all your object names here
 METHODS=("sdmunips") # "unimsps")       # Add all your method names here
-L_ADD_05=("true ""false")
+L_ADD_05=("false")
 # Path to your run.sh script (now expecting two arguments)
 RUN_SCRIPT="./train.sh"
 TAG=""
@@ -16,9 +16,9 @@ for i in $(seq $count); do
     for ADD_05 in "${L_ADD_05[@]}"; do
 
         if [ "$ADD_05" == "true" ]; then
-            TAG="_05_"
+            TAG="_05_crop"
         else 
-            TAG="_00_"
+            TAG="_00_crop"
         fi
 
         for object in "${OBJECTS[@]}"; do

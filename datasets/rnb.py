@@ -9,12 +9,76 @@ import cv2
 import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 import torchvision.transforms.functional as TF
-
+import matplotlib.pyplot as plt
 import pytorch_lightning as pl
 
 import datasets
 from models.ray_utils import get_ray_directions
 from utils.misc import get_rank
+
+
+def crop_image_tensor_with_bbox(image_tensor: torch.Tensor, bbox: torch.Tensor) -> torch.Tensor:
+   
+    if bbox.tolist() == [-1, -1, -1, -1]:
+        print("Warning: Invalid bounding box (no foreground found in mask). Returning empty tensor.")
+        return torch.empty(0) # Or handle this case as appropriate for your application
+
+    x_min, y_min, x_max, y_max = bbox.tolist()
+
+    # Calculate height and width of the crop
+    crop_height = y_max - y_min + 1
+    crop_width = x_max - x_min + 1
+
+    # torchvision.transforms.functional.crop expects (img, top, left, height, width)
+    # top = y_min, left = x_min
+    cropped_image = TF.crop(image_tensor, top=y_min, left=x_min, height=crop_height, width=crop_width)
+
+    return cropped_image
+
+
+
+def compute_expanded_bbox_from_mask(mask: torch.Tensor) -> torch.Tensor:
+
+    # Get mask dimensions
+    H, W = mask.shape
+
+    # Determine the reference image size for padding calculation
+    ref_H, ref_W = H, W
+
+    # Find coordinates of foreground pixels
+    # torch.nonzero() returns indices where the mask is non-zero
+    foreground_coords = torch.nonzero(mask, as_tuple=False) # shape (N, 2) where N is number of foreground pixels
+
+    if foreground_coords.numel() == 0:
+        # No foreground pixels found, return a default "invalid" bbox
+        return torch.tensor([-1, -1, -1, -1], dtype=torch.float32)
+
+    # Calculate initial bounding box
+    y_min_initial = torch.min(foreground_coords[:, 0]).item()
+    y_max_initial = torch.max(foreground_coords[:, 0]).item()
+    x_min_initial = torch.min(foreground_coords[:, 1]).item()
+    x_max_initial = torch.max(foreground_coords[:, 1]).item()
+
+    # Calculate padding based on 10% of the biggest image dimension
+    biggest_dim = max(ref_H, ref_W)
+    padding = int(0.05 * biggest_dim) # Ensure padding is an integer
+
+    # Expand bounding box
+    x_min_expanded = x_min_initial - padding
+    y_min_expanded = y_min_initial - padding
+    x_max_expanded = x_max_initial + padding
+    y_max_expanded = y_max_initial + padding
+
+    # Clip bounding box to image boundaries (0 to W-1, 0 to H-1)
+    x_min_clipped = int(max(0, x_min_expanded))
+    y_min_clipped = int(max(0, y_min_expanded))
+    x_max_clipped = int(min(W - 1, x_max_expanded))
+    y_max_clipped = int(min(H - 1, y_max_expanded))
+
+    # Return tensor with integer type
+    return torch.tensor([x_min_clipped, y_min_clipped, x_max_clipped, y_max_clipped], dtype=torch.int32)
+
+
 
 
 def load_K_Rt_from_P(P=None):
@@ -165,18 +229,35 @@ class RNbDatasetBase():
 
         n_images = max([int(k.split('_')[-1]) for k in cams.keys()]) + 1
 
+        crop_images = False
+        if crop_images : 
+            accumulated_mask = torch.zeros((self.img_wh[1], self.img_wh[0]), dtype=torch.float32)
+            for i in range(n_images):
+
+                mask_path = os.path.join(self.config.root_dir, 'mask', f'{i:03d}.png')
+                mask = Image.open(mask_path).convert('L') # (H, W, 1)
+                mask = mask.resize(self.img_wh, Image.BICUBIC)
+                mask = TF.to_tensor(mask)[0]
+                accumulated_mask = accumulated_mask + mask
+            final_boolean_mask_for_bbox = accumulated_mask > 0.0 # Or > 0.5 if masks are strictly [0,1]
+            bbox_mask = compute_expanded_bbox_from_mask(final_boolean_mask_for_bbox)
+
         for i in range(n_images):
+
+            mask_path = os.path.join(self.config.root_dir, 'mask', f'{i:03d}.png')
+            mask = Image.open(mask_path).convert('L') # (H, W, 1)
+            mask = mask.resize(self.img_wh, Image.BICUBIC)
+            mask = TF.to_tensor(mask)[0]
 
             world_mat, scale_mat = cams[f'world_mat_{i}'], cams[f'scale_mat_{i}']
             P = (world_mat @ scale_mat)[:3,:4]
             K, c2w = load_K_Rt_from_P(P)
             fx, fy, cx, cy = K[0,0] * self.factor, K[1,1] * self.factor, K[0,2] * self.factor, K[1,2] * self.factor
-            #print(fx,fy,cx,cy)
+            if crop_images:
+                cx = cx - bbox_mask[0].item()
+                cy = cy - bbox_mask[1].item()
+
             add_05 = self.config.add_05
-            print("\n\n")
-            print("add_05:")
-            print(add_05)
-            print("\n\n")
             directions = get_ray_directions(w, h, fx, fy, cx, cy, use_pixel_centers=add_05)
             self.directions.append(directions)
             
@@ -190,10 +271,7 @@ class RNbDatasetBase():
             img = img.resize(self.img_wh, Image.BICUBIC)
             img = TF.to_tensor(img).permute(1, 2, 0)[...,:3]
 
-            mask_path = os.path.join(self.config.root_dir, 'mask', f'{i:03d}.png')
-            mask = Image.open(mask_path).convert('L') # (H, W, 1)
-            mask = mask.resize(self.img_wh, Image.BICUBIC)
-            mask = TF.to_tensor(mask)[0]
+            
 
             
             #depth_path = os.path.join(self.config.root_dir, f"{frame['file_path']}_depth.exr")
@@ -215,6 +293,23 @@ class RNbDatasetBase():
             boolean_mask_expanded = boolean_mask.unsqueeze(-1).expand_as(normals)
             normals[~boolean_mask_expanded] = 0.0
             img[~boolean_mask_expanded] = 0.0
+
+            if crop_images:
+
+                img_to_crop = img.permute(2, 0, 1) # (H, W, C) -> (C, H, W)
+                normals_to_crop = normals.permute(2, 0, 1) # (H, W, C) -> (C, H, W)
+
+                img2 = crop_image_tensor_with_bbox(img_to_crop, bbox_mask)
+                normals2 = crop_image_tensor_with_bbox(normals_to_crop, bbox_mask)
+                img = img2.permute(1, 2, 0) # (C, H_cropped, W_cropped) -> (H_cropped, W_cropped, C)
+                normals = normals2.permute(1, 2, 0) # (C, H_cropped, W_cropped) -> (H_cropped, W_cropped, C)
+                mask = crop_image_tensor_with_bbox(mask,bbox_mask)
+
+                self.img_wh = (mask.shape[1], mask.shape[0])
+                self.h = mask.shape[0]
+                self.w = mask.shape[1]
+
+
             
             self.all_fg_masks.append(mask) # (h, w)
             self.all_images.append(img[...,:3])

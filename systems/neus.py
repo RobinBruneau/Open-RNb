@@ -18,7 +18,6 @@ from models.neus import CameraPoseOptimizer
 def gen_light_directions(index_light,normal=None):
         
 
-
     # Define base tilt and slant angles for the light sources in a canonical frame.
     # Convert degrees to radians using torch.deg2rad
     #tilt = torch.deg2rad(torch.tensor([0., 120., 240.], device='cuda')) # Azimuth angles for 3 lights
@@ -244,6 +243,10 @@ class NeuSSystem(BaseSystem):
             #print(normals.shape)
             #print("\n\n")
             if self.config.dataset.apply_light_opti:
+                if torch.isnan(normals).any():
+                    print("NaNs found in normals before gen_light_directions!")
+                if torch.isinf(normals).any():
+                    print("Infs found in normals before gen_light_directions!")
                 lights = gen_light_directions(index_light,normals)
             else : 
                 lights = gen_light_directions(index_light)
