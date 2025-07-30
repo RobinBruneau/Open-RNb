@@ -213,8 +213,8 @@ class RNbDatasetBase():
         self.w, self.h = w, h
         self.img_wh = (self.w, self.h)
         self.factor = w / W
-        print(self.W)
-        print(self.H)
+        print(self.w)
+        print(self.h)
 
         #self.near, self.far = self.config.near_plane, self.config.far_plane
 
