@@ -313,7 +313,7 @@ class RNbDatasetBase():
                 self.w = mask.shape[1]
 
             add_05 = self.config.add_05
-            directions = get_ray_directions(w, h, fx, fy, cx, cy, use_pixel_centers=add_05)
+            directions = get_ray_directions(self.w, self.h, fx, fy, cx, cy, use_pixel_centers=add_05)
             self.directions.append(directions)
             
             self.all_fg_masks.append(mask) # (h, w)
