@@ -213,6 +213,8 @@ class RNbDatasetBase():
         self.w, self.h = w, h
         self.img_wh = (self.w, self.h)
         self.factor = w / W
+        print(self.W)
+        print(self.H)
 
         #self.near, self.far = self.config.near_plane, self.config.far_plane
 
@@ -229,7 +231,7 @@ class RNbDatasetBase():
 
         n_images = max([int(k.split('_')[-1]) for k in cams.keys()]) + 1
 
-        crop_images = False
+        crop_images = True
         if crop_images : 
             accumulated_mask = torch.zeros((self.img_wh[1], self.img_wh[0]), dtype=torch.float32)
             for i in range(n_images):
@@ -241,6 +243,8 @@ class RNbDatasetBase():
                 accumulated_mask = accumulated_mask + mask
             final_boolean_mask_for_bbox = accumulated_mask > 0.0 # Or > 0.5 if masks are strictly [0,1]
             bbox_mask = compute_expanded_bbox_from_mask(final_boolean_mask_for_bbox)
+            print(final_boolean_mask_for_bbox.shape)
+            print(bbox_mask)
 
         for i in range(n_images):
 
@@ -253,6 +257,8 @@ class RNbDatasetBase():
             P = (world_mat @ scale_mat)[:3,:4]
             K, c2w = load_K_Rt_from_P(P)
             fx, fy, cx, cy = K[0,0] * self.factor, K[1,1] * self.factor, K[0,2] * self.factor, K[1,2] * self.factor
+            print(cx)
+            print(cy)
             if crop_images:
                 cx = cx - bbox_mask[0].item()
                 cy = cy - bbox_mask[1].item()
