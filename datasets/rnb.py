@@ -272,6 +272,7 @@ class RNbDatasetBase():
             img = Image.open(img_path)
             img = img.resize(self.img_wh, Image.BICUBIC)
             img = TF.to_tensor(img).permute(1, 2, 0)[...,:3]
+            print(img.shape)
 
             
 
