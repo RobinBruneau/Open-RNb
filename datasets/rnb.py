@@ -306,6 +306,7 @@ class RNbDatasetBase():
                 img = img2.permute(1, 2, 0) # (C, H_cropped, W_cropped) -> (H_cropped, W_cropped, C)
                 normals = normals2.permute(1, 2, 0) # (C, H_cropped, W_cropped) -> (H_cropped, W_cropped, C)
                 mask = crop_image_tensor_with_bbox(mask,bbox_mask)
+                print(mask.shape)
 
                 self.img_wh = (mask.shape[1], mask.shape[0])
                 self.h = mask.shape[0]
