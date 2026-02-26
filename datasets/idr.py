@@ -3,7 +3,6 @@ import json
 import math
 import numpy as np
 from PIL import Image
-import OpenEXR
 import array
 import cv2
 import torch
@@ -34,6 +33,7 @@ def load_K_Rt_from_P(P=None):
     return intrinsics, pose
 
 def load_exr_image(filepath):
+    import OpenEXR
     exr_file = OpenEXR.InputFile(filepath)
     header = exr_file.header()
     
