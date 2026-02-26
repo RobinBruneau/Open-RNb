@@ -91,6 +91,17 @@ class NeuSSystem(BaseSystem):
         self.train_num_samples = self.config.model.train_num_rays * (self.config.model.num_samples_per_ray + self.config.model.get('num_samples_per_ray_bg', 0))
         self.train_num_rays = self.config.model.train_num_rays
 
+    def on_fit_start(self):
+        """Propagate scene scaling from dataset to geometry for inverse scaling at export.
+        Runs unconditionally — any sfm dataset needs inverse scaling, even without albedo scaling."""
+        import torch
+        ds = self.trainer.datamodule.train_dataloader().dataset
+        if hasattr(ds, 'scale_factor'):
+            self.model.geometry.scene_center.copy_(
+                torch.tensor(ds.scene_center, dtype=torch.float32))
+            self.model.geometry.scale_factor.fill_(ds.scale_factor)
+            rank_zero_info(f"[NeuS] Scene scaling propagated: center={ds.scene_center}, scale={ds.scale_factor}")
+
     def forward(self, batch):
         return self.model(batch['rays'],batch['lights'])
     

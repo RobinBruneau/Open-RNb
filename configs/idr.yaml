@@ -1,20 +1,21 @@
-name: neus-colmap-${basename:${dataset.root_dir}}
+name: idr-${dataset.scene}
 tag: ""
 seed: 42
 
 dataset:
-  name: colmap
-  root_dir: ./load/unbounded360/garden
-  img_downscale: 4 # specify training image size by either img_wh or img_downscale
-  up_est_method: ground # if true, use estimated ground plane normal direction as up direction
-  center_est_method: lookat
-  n_test_traj_steps: 120
-  apply_mask: false
-  load_data_on_gpu: false
+  name: idr
+  scene: ???
+  root_dir: ./data/${dataset.scene}
+  img_downscale: 1.0
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  apply_light_opti: true
+  apply_rgb_plus: true
 
 model:
   name: neus
-  radius: 0.6
+  radius: 1.5
   num_samples_per_ray: 1024
   train_num_rays: 256
   max_train_num_rays: 8192
@@ -23,10 +24,11 @@ model:
   dynamic_ray_sampling: true
   batch_image_sampling: true
   randomized: true
-  ray_chunk: 2048
+  ray_chunk: 4096
   cos_anneal_end: 20000
-  learned_background: true
-  background_color: random
+  learned_background: false
+  background_color: black
+  no_albedo: false
   variance:
     init_val: 0.3
     modulate: false
@@ -37,20 +39,17 @@ model:
     grad_type: analytic
     isosurface:
       method: mc
-      resolution: 512
+      resolution: 720
       chunk: 2097152
       threshold: 0.
     xyz_encoding_config:
-      otype: ProgressiveBandHashGrid
+      otype: HashGrid
       n_levels: 16
       n_features_per_level: 2
       log2_hashmap_size: 19
       base_resolution: 32
       per_level_scale: 1.3195079107728942
       include_xyz: true
-      start_level: 4
-      start_step: 0
-      update_steps: 1000
     mlp_network_config:
       otype: VanillaMLP
       activation: ReLU
@@ -61,48 +60,13 @@ model:
       sphere_init_radius: 0.5
       weight_norm: true
   texture:
-    name: volume-radiance
-    input_feature_dim: ${add:${model.geometry.feature_dim},3} # surface normal as additional input
+    name: volume-albedo
+    input_feature_dim: ${model.geometry.feature_dim} # surface normal as additional input
     dir_encoding_config:
       otype: SphericalHarmonics
       degree: 4
     mlp_network_config:
-      otype: VanillaMLP
-      activation: ReLU
-      output_activation: none
-      n_neurons: 64
-      n_hidden_layers: 2
-    color_activation: sigmoid
-  # background model configurations
-  num_samples_per_ray_bg: 256
-  geometry_bg:
-    name: volume-density
-    radius: ${model.radius}
-    feature_dim: 8
-    density_activation: trunc_exp
-    density_bias: -1
-    isosurface: null
-    xyz_encoding_config:
-      otype: HashGrid
-      n_levels: 16
-      n_features_per_level: 2
-      log2_hashmap_size: 19
-      base_resolution: 32
-      per_level_scale: 1.3195079107728942
-    mlp_network_config:
-      otype: VanillaMLP
-      activation: ReLU
-      output_activation: none
-      n_neurons: 64
-      n_hidden_layers: 1
-  texture_bg:
-    name: volume-radiance
-    input_feature_dim: ${model.geometry_bg.feature_dim}
-    dir_encoding_config:
-      otype: SphericalHarmonics
-      degree: 4
-    mlp_network_config:
-      otype: VanillaMLP
+      otype: FullyFusedMLP
       activation: ReLU
       output_activation: none
       n_neurons: 64
@@ -111,16 +75,18 @@ model:
 
 system:
   name: neus-system
+  render_all_lights: true
   loss:
-    lambda_rgb_mse: 10.
-    lambda_rgb_l1: 0.
-    lambda_mask: 0.0
+    lambda_rendering_mse: 0.
+    lambda_rendering_l1: 10.
+    lambda_rgb_mse: 5.
+    lambda_rgb_l1: 5.
+    lambda_mask: 0.1
     lambda_eikonal: 0.1
     lambda_curvature: 0.
     lambda_sparsity: 0.0
-    lambda_distortion: 0.0
-    lambda_distortion_bg: 0.0
-    lambda_opaque: 0.0
+    lambda_distortion: 0.
+    lambda_opaque: 0.
     sparsity_scale: 1.
   optimizer:
     name: AdamW
@@ -132,10 +98,6 @@ system:
       geometry:
         lr: 0.01
       texture:
-        lr: 0.01
-      geometry_bg:
-        lr: 0.01
-      texture_bg:
         lr: 0.01
       variance:
         lr: 0.001
@@ -167,7 +129,7 @@ trainer:
   max_steps: 20000
   log_every_n_steps: 100
   num_sanity_val_steps: 0
-  val_check_interval: 5000
+  val_check_interval: 10000
   limit_train_batches: 1.0
   limit_val_batches: 2
   enable_progress_bar: true

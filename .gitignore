@@ -1,9 +1,37 @@
-# Ignore data folder
+# Data & experiments
 data/
-
-# Ignore experiments folder
 exp/
-
-# Ignore runs folder
 runs/
-/runs/
+
+# BMAD tooling
+_bmad/
+_bmad-output/
+
+# Claude Code / VS Code
+.claude/
+.vscode/
+
+# JetBrains IDE
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

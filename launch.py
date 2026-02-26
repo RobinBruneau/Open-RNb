@@ -1,6 +1,7 @@
 import sys
 import argparse
 import os
+import copy
 import time
 import logging
 from datetime import datetime
@@ -123,12 +124,125 @@ def main():
     )
 
     if args.train:
-        if args.resume and not args.resume_weights_only:
-            # FIXME: different behavior in pytorch-lighting>1.9 ?
-            trainer.fit(system, datamodule=dm, ckpt_path=args.resume)
+        from pytorch_lightning.utilities.rank_zero import rank_zero_info
+
+        albedo_cfg = config.system.get('albedo_scaling', {})
+        two_phase = albedo_cfg.get('enabled', False)
+
+        if two_phase:
+            from utils.albedo_scaling import compute_albedo_scale_ratios, scale_albedo_images
+
+            total_steps = config.trainer.max_steps
+            warmup_ratio = albedo_cfg.get('warmup_ratio', 0.1)
+            phase1_steps = int(warmup_ratio * total_steps)
+            phase2_steps = total_steps - phase1_steps
+
+            # Validate: rendering lambdas must be scalar (not schedules)
+            for key in ['lambda_rendering_mse', 'lambda_rendering_l1']:
+                val = config.system.loss[key]
+                if isinstance(val, (list, tuple)):
+                    raise ValueError(f"Two-phase training requires scalar {key}, got schedule: {val}")
+
+            # Helper: recompute scheduler gamma for a given max_steps
+            warmup_steps = config.system.warmup_steps
+            def _recompute_scheduler(cfg, max_steps):
+                cfg.trainer.max_steps = max_steps
+                decay_steps = max(max_steps - warmup_steps, 1)
+                new_gamma = 0.1 ** (1.0 / decay_steps)
+                # Update the ExponentialLR gamma (second scheduler in the list)
+                cfg.system.scheduler.schedulers[1].args.gamma = new_gamma
+                cfg.checkpoint.every_n_train_steps = max_steps
+
+            # ---- PHASE 1: geometry only (no rendering loss) ----
+            rank_zero_info(f"[TwoPhase] Phase 1: {phase1_steps} steps, no rendering loss")
+            config_p1 = copy.deepcopy(config)
+            _recompute_scheduler(config_p1, phase1_steps)
+            config_p1.system.loss.lambda_rendering_mse = 0.
+            config_p1.system.loss.lambda_rendering_l1 = 0.
+
+            system_p1 = systems.make(
+                config_p1.system.name, config_p1,
+                load_from_checkpoint=None if not args.resume_weights_only else args.resume
+            )
+            dm.setup('fit')  # Explicit setup before phase 1
+
+            # Phase-specific callbacks (avoid stale state from shared callbacks)
+            callbacks_p1 = [
+                ModelCheckpoint(dirpath=config_p1.ckpt_dir, **config_p1.checkpoint),
+                LearningRateMonitor(logging_interval='step'),
+                CustomProgressBar(refresh_rate=1),
+            ]
+            trainer_p1 = Trainer(
+                devices=n_gpus, accelerator='gpu',
+                callbacks=callbacks_p1, logger=loggers, strategy=strategy,
+                **config_p1.trainer
+            )
+
+            if args.resume and not args.resume_weights_only:
+                trainer_p1.fit(system_p1, datamodule=dm, ckpt_path=args.resume)
+            else:
+                trainer_p1.fit(system_p1, datamodule=dm)
+
+            # ---- ALBEDO SCALING: extract mesh + compute ratios ----
+            rank_zero_info("[TwoPhase] Extracting intermediate mesh for albedo scaling")
+            mesh_res = albedo_cfg.get('mesh_resolution', 256)
+            old_res = system_p1.config.model.geometry.isosurface.resolution
+            system_p1.config.model.geometry.isosurface.resolution = mesh_res
+            mesh = system_p1.model.export(config.export)
+            system_p1.config.model.geometry.isosurface.resolution = old_res
+
+            mesh_path = os.path.join(config.save_dir, 'intermediate_mesh.obj')
+            os.makedirs(config.save_dir, exist_ok=True)
+            system_p1.save_mesh('intermediate_mesh.obj', **mesh)
+
+            ds = dm.train_dataloader().dataset
+            scale_ratios = compute_albedo_scale_ratios(
+                albedo_images=[img.cpu().numpy() for img in ds.all_images],
+                camera_Ks=ds.camera_Ks,
+                camera_c2ws=ds.camera_c2ws,
+                mesh_path=mesh_path,
+                n_samples=albedo_cfg.get('n_samples', 2000),
+            )
+            scaled = scale_albedo_images(ds.all_images, scale_ratios)
+            ds.update_albedos(scaled)
+            rank_zero_info(f"[TwoPhase] Albedos scaled. Mean ratios: {scale_ratios.mean(axis=0).tolist()}")
+
+            del system_p1, trainer_p1  # Free GPU memory
+            import gc, torch as _torch
+            gc.collect()
+            _torch.cuda.empty_cache()
+
+            # ---- PHASE 2: fresh model, full training with scaled albedos ----
+            rank_zero_info(f"[TwoPhase] Phase 2: {phase2_steps} steps, fresh model, rendering loss active")
+            config_p2 = copy.deepcopy(config)
+            _recompute_scheduler(config_p2, phase2_steps)
+
+            system_p2 = systems.make(config_p2.system.name, config_p2)  # Fresh weights
+            callbacks_p2 = [
+                ModelCheckpoint(dirpath=config_p2.ckpt_dir, **config_p2.checkpoint),
+                LearningRateMonitor(logging_interval='step'),
+                CodeSnapshotCallback(config_p2.code_dir, use_version=False, ignore_patterns=folders_to_ignore),
+                ConfigSnapshotCallback(config_p2, config_p2.config_dir, use_version=False),
+                CustomProgressBar(refresh_rate=1),
+            ]
+            trainer_p2 = Trainer(
+                devices=n_gpus, accelerator='gpu',
+                callbacks=callbacks_p2, logger=loggers, strategy=strategy,
+                **config_p2.trainer
+            )
+
+            # dm.setup() is IDEMPOTENT — won't overwrite scaled albedos
+            trainer_p2.fit(system_p2, datamodule=dm)
+            trainer_p2.test(system_p2, datamodule=dm)
+
         else:
-            trainer.fit(system, datamodule=dm)
-        trainer.test(system, datamodule=dm)
+            # Standard single-phase training (unchanged)
+            if args.resume and not args.resume_weights_only:
+                trainer.fit(system, datamodule=dm, ckpt_path=args.resume)
+            else:
+                trainer.fit(system, datamodule=dm)
+            trainer.test(system, datamodule=dm)
+
     elif args.validate:
         trainer.validate(system, datamodule=dm, ckpt_path=args.resume)
     elif args.test:

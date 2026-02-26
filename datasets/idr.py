@@ -122,7 +122,7 @@ def gen_light_directions(c2w,normal=None):
         return light_directions_world
 '''
 
-class RNbDatasetBase():
+class IDRDatasetBase():
     def setup(self, config, split):
         self.config = config
         self.split = split
@@ -257,7 +257,7 @@ class RNbDatasetBase():
             print(f"Test split: Prepared {len(self.test_render_combinations)} image-light combinations for rendering.")
 
 
-class RNbDataset(Dataset, RNbDatasetBase):
+class IDRDataset(Dataset, IDRDatasetBase):
     def __init__(self, config, split):
         self.setup(config, split)
 
@@ -282,7 +282,7 @@ class RNbDataset(Dataset, RNbDatasetBase):
             }
 
 
-class RNbIterableDataset(IterableDataset, RNbDatasetBase):
+class IDRIterableDataset(IterableDataset, IDRDatasetBase):
     def __init__(self, config, split):
         self.setup(config, split)
 
@@ -291,21 +291,21 @@ class RNbIterableDataset(IterableDataset, RNbDatasetBase):
             yield {}
 
 
-@datasets.register('RNb')
-class RNbDataModule(pl.LightningDataModule):
+@datasets.register('idr')
+class IDRDataModule(pl.LightningDataModule):
     def __init__(self, config):
         super().__init__()
         self.config = config
     
     def setup(self, stage=None):
         if stage in [None, 'fit']:
-            self.train_dataset = RNbIterableDataset(self.config, self.config.train_split)
+            self.train_dataset = IDRIterableDataset(self.config, self.config.train_split)
         if stage in [None, 'fit', 'validate']:
-            self.val_dataset = RNbDataset(self.config, self.config.val_split)
+            self.val_dataset = IDRDataset(self.config, self.config.val_split)
         if stage in [None, 'test']:
-            self.test_dataset = RNbDataset(self.config, self.config.test_split)
+            self.test_dataset = IDRDataset(self.config, self.config.test_split)
         if stage in [None, 'predict']:
-            self.predict_dataset = RNbDataset(self.config, self.config.train_split)
+            self.predict_dataset = IDRDataset(self.config, self.config.train_split)
 
     def prepare_data(self):
         pass

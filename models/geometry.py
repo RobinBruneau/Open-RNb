@@ -76,6 +76,8 @@ class BaseImplicitGeometry(BaseModel):
             self.helper = MarchingCubeHelper(self.config.isosurface.resolution, use_torch=self.config.isosurface.method=='mc-torch')
         self.radius = self.config.radius
         self.contraction_type = None # assigned in system
+        self.register_buffer('scene_center', torch.zeros(3))
+        self.register_buffer('scale_factor', torch.ones(1))
 
     def forward_level(self, points):
         raise NotImplementedError
@@ -109,7 +111,10 @@ class BaseImplicitGeometry(BaseModel):
         vmin_ = (vmin - (vmax - vmin) * 0.1).clamp(-self.radius, self.radius)
         vmax_ = (vmax + (vmax - vmin) * 0.1).clamp(-self.radius, self.radius)
         mesh_fine = self.isosurface_(vmin_, vmax_)
-        return mesh_fine 
+        # Transform mesh from normalized space back to world coordinates
+        if self.scale_factor.item() != 1.0 or self.scene_center.abs().sum().item() > 0:
+            mesh_fine['v_pos'] = mesh_fine['v_pos'] / self.scale_factor + self.scene_center
+        return mesh_fine
 
 
 @models.register('volume-density')

@@ -13,4 +13,4 @@ def make(name, config):
     return dataset
 
 
-from . import blender, blendercues, colmap, dtu, rnb
+from . import idr, sfm

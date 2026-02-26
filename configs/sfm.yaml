@@ -1,18 +1,26 @@
-name: neus-dtu-${basename:${dataset.root_dir}}
+name: sfm-${dataset.scene}
 tag: ""
 seed: 42
 
 dataset:
-  name: dtu
-  root_dir: ./load/DTU-neus/dtu_scan63
-  cameras_file: cameras_sphere.npz
-  img_downscale: 2 # specify training image size by either img_wh or img_downscale
-  n_test_traj_steps: 60
-  apply_mask: false
+  name: sfm
+  scene: ???
+  normal_sfm: ???          # Required: path to normal maps SfMData
+  albedo_sfm: ""           # Optional: path to albedo SfMData
+  mask_sfm: ""             # Optional: path to mask SfMData
+  scaling_mode: auto       # auto | landmarks | silhouettes | none
+  sphere_scale: 0.9
+  fg_area_ratio: 5
+  img_downscale: 1.0
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  apply_light_opti: true
+  apply_rgb_plus: true
 
 model:
   name: neus
-  radius: 1.0
+  radius: 1.5
   num_samples_per_ray: 1024
   train_num_rays: 256
   max_train_num_rays: 8192
@@ -21,10 +29,11 @@ model:
   dynamic_ray_sampling: true
   batch_image_sampling: true
   randomized: true
-  ray_chunk: 2048
+  ray_chunk: 4096
   cos_anneal_end: 20000
-  learned_background: true
-  background_color: random
+  learned_background: false
+  background_color: black
+  no_albedo: false          # Do NOT set to true — breaks albedo scaling
   variance:
     init_val: 0.3
     modulate: false
@@ -35,7 +44,7 @@ model:
     grad_type: analytic
     isosurface:
       method: mc
-      resolution: 512
+      resolution: 720
       chunk: 2097152
       threshold: 0.
     xyz_encoding_config:
@@ -56,48 +65,13 @@ model:
       sphere_init_radius: 0.5
       weight_norm: true
   texture:
-    name: volume-radiance
-    input_feature_dim: ${add:${model.geometry.feature_dim},3} # surface normal as additional input
+    name: volume-albedo
+    input_feature_dim: ${model.geometry.feature_dim}
     dir_encoding_config:
       otype: SphericalHarmonics
       degree: 4
     mlp_network_config:
-      otype: VanillaMLP
-      activation: ReLU
-      output_activation: none
-      n_neurons: 64
-      n_hidden_layers: 2
-    color_activation: sigmoid
-  # background model configurations
-  num_samples_per_ray_bg: 64
-  geometry_bg:
-    name: volume-density
-    radius: ${model.radius}
-    feature_dim: 8
-    density_activation: trunc_exp
-    density_bias: -1
-    isosurface: null
-    xyz_encoding_config:
-      otype: HashGrid
-      n_levels: 16
-      n_features_per_level: 2
-      log2_hashmap_size: 19
-      base_resolution: 32
-      per_level_scale: 1.3195079107728942
-    mlp_network_config:
-      otype: VanillaMLP
-      activation: ReLU
-      output_activation: none
-      n_neurons: 64
-      n_hidden_layers: 1
-  texture_bg:
-    name: volume-radiance
-    input_feature_dim: ${model.geometry_bg.feature_dim}
-    dir_encoding_config:
-      otype: SphericalHarmonics
-      degree: 4
-    mlp_network_config:
-      otype: VanillaMLP
+      otype: FullyFusedMLP
       activation: ReLU
       output_activation: none
       n_neurons: 64
@@ -106,16 +80,23 @@ model:
 
 system:
   name: neus-system
+  render_all_lights: true
+  albedo_scaling:
+    enabled: false          # Auto-enabled when albedo_sfm is provided
+    warmup_ratio: 0.1       # Fraction of total max_steps for phase 1
+    n_samples: 2000         # Samples per view for ratio computation
+    mesh_resolution: 256    # Lower resolution for intermediate mesh (faster)
   loss:
-    lambda_rgb_mse: 0.
-    lambda_rgb_l1: 1.
-    lambda_mask: 0.0
+    lambda_rendering_mse: 0.
+    lambda_rendering_l1: 10.
+    lambda_rgb_mse: 5.
+    lambda_rgb_l1: 5.
+    lambda_mask: 0.1
     lambda_eikonal: 0.1
     lambda_curvature: 0.
     lambda_sparsity: 0.0
-    lambda_distortion: 0.0
-    lambda_distortion_bg: 0.0
-    lambda_opaque: 0.0
+    lambda_distortion: 0.
+    lambda_opaque: 0.
     sparsity_scale: 1.
   optimizer:
     name: AdamW
@@ -128,26 +109,23 @@ system:
         lr: 0.01
       texture:
         lr: 0.01
-      geometry_bg:
-        lr: 0.01
-      texture_bg:
-        lr: 0.01
       variance:
         lr: 0.001
-  constant_steps: 5000
+  warmup_steps: 500
   scheduler:
     name: SequentialLR
     interval: step
     milestones:
-      - ${system.constant_steps}
+      - ${system.warmup_steps}
     schedulers:
-      - name: ConstantLR
+      - name: LinearLR
         args:
-          factor: 1.0
-          total_iters: ${system.constant_steps}
+          start_factor: 0.01
+          end_factor: 1.0
+          total_iters: ${system.warmup_steps}
       - name: ExponentialLR
         args:
-          gamma: ${calc_exp_lr_decay_rate:0.1,${sub:${trainer.max_steps},${system.constant_steps}}}
+          gamma: ${calc_exp_lr_decay_rate:0.1,${sub:${trainer.max_steps},${system.warmup_steps}}}
 
 checkpoint:
   save_top_k: -1
@@ -161,7 +139,7 @@ trainer:
   max_steps: 20000
   log_every_n_steps: 100
   num_sanity_val_steps: 0
-  val_check_interval: 5000
+  val_check_interval: 10000
   limit_train_batches: 1.0
   limit_val_batches: 2
   enable_progress_bar: true
