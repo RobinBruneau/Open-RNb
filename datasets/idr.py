@@ -12,6 +12,7 @@ import torchvision.transforms.functional as TF
 import pytorch_lightning as pl
 
 import datasets
+from datasets.utils import compute_scene_scaling
 from models.ray_utils import get_ray_directions
 from utils.misc import get_rank
 
@@ -134,7 +135,12 @@ class IDRDatasetBase():
 
         cams = np.load(os.path.join(self.config.root_dir, 'cameras.npz'))
 
-        img_sample = cv2.imread(os.path.join(self.config.root_dir, 'normal', '000.png'))
+        # Auto-detect image naming: 000.png (3-digit) or 0000.png (4-digit)
+        normal_dir = os.path.join(self.config.root_dir, 'normal')
+        first_img = sorted(os.listdir(normal_dir))[0]
+        self._n_digits = len(first_img.split('.')[0])
+
+        img_sample = cv2.imread(os.path.join(normal_dir, first_img))
         H, W = img_sample.shape[0], img_sample.shape[1]
 
         if 'img_wh' in self.config:
@@ -163,7 +169,20 @@ class IDRDatasetBase():
         all_normals_cam = []
         self.directions = []
 
+        # For albedo scaling compatibility
+        self.albedo_paths = []
+        self.camera_Ks = []
+
         n_images = max([int(k.split('_')[-1]) for k in cams.keys()]) + 1
+
+        # Config-driven scaling parameters
+        scaling_mode = self.config.get('scaling_mode', 'scale_mat')
+        sphere_scale = self.config.get('sphere_scale', 1.0)
+        fg_area_ratio = self.config.get('fg_area_ratio', 5.0)
+
+        # Collect cameras and masks for non-scale_mat modes
+        idr_cameras_for_scaling = []
+        idr_masks_for_scaling = []
 
         for i in range(n_images):
 
@@ -177,14 +196,17 @@ class IDRDatasetBase():
             c2w = torch.from_numpy(c2w).float()
             c2w_ = c2w.clone()
             c2w_[:3,1:3] *= -1. # flip input sign
-            self.all_c2w.append(c2w_[:3,:4]) 
+            self.all_c2w.append(c2w_[:3,:4])
 
-            img_path = os.path.join(self.config.root_dir, 'albedo', f'{i:03d}.png')
+            self.camera_Ks.append(np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32))
+
+            img_path = os.path.join(self.config.root_dir, 'albedo', f'{i:0{self._n_digits}d}.png')
+            self.albedo_paths.append(img_path)
             img = Image.open(img_path)
             img = img.resize(self.img_wh, Image.BICUBIC)
             img = TF.to_tensor(img).permute(1, 2, 0)[...,:3]
 
-            mask_path = os.path.join(self.config.root_dir, 'mask', f'{i:03d}.png')
+            mask_path = os.path.join(self.config.root_dir, 'mask', f'{i:0{self._n_digits}d}.png')
             mask = Image.open(mask_path).convert('L') # (H, W, 1)
             mask = mask.resize(self.img_wh, Image.BICUBIC)
             mask = TF.to_tensor(mask)[0]
@@ -196,7 +218,7 @@ class IDRDatasetBase():
             #normal_path = os.path.join(self.config.root_dir, f"{frame['file_path']}_normal.exr")
             #normals_base = load_exr_image(normal_path)
             #print(normals_base.shape)
-            normal_path2 = os.path.join(self.config.root_dir, 'normal', f'{i:03d}.png')
+            normal_path2 = os.path.join(self.config.root_dir, 'normal', f'{i:0{self._n_digits}d}.png')
             normals = Image.open(normal_path2)
             normals = normals.resize(self.img_wh, Image.BICUBIC)
             normals = TF.to_tensor(normals).permute(1, 2, 0) # (4, h, w) => (h, w, 4)
@@ -215,6 +237,28 @@ class IDRDatasetBase():
 
             self.all_normals.append(normals)
 
+            # Collect camera + mask data for non-scale_mat scaling modes
+            # c2w from load_K_Rt_from_P gives cam2world in *normalized* space (scale_mat applied)
+            # For other modes we need world-space camera center from the unscaled pose.
+            # The unscaled c2w is obtained by P = world_mat[:3,:4] (no scale_mat).
+            if scaling_mode != 'scale_mat':
+                world_mat_only = cams[f'world_mat_{i}']
+                P_world = world_mat_only[:3, :4]
+                K_w, c2w_world = load_K_Rt_from_P(P_world)
+                fx_w = K_w[0, 0] * self.factor
+                fy_w = K_w[1, 1] * self.factor
+                cx_w = K_w[0, 2] * self.factor
+                cy_w = K_w[1, 2] * self.factor
+                # R_cam2world: rotation part of c2w_world (world convention, Y/Z unflipped)
+                R_c2w_world = c2w_world[:3, :3]
+                center_world = c2w_world[:3, 3]
+                idr_cameras_for_scaling.append({
+                    'fx': fx_w, 'fy': fy_w, 'cx': cx_w, 'cy': cy_w,
+                    'R_cam2world': R_c2w_world,
+                    'center': center_world,
+                })
+                idr_masks_for_scaling.append(mask.numpy())
+
         if split == 'train' and self.config.get('num_views', False):
             num_views = self.config.num_views
             jump = len(self.all_c2w) // num_views
@@ -229,7 +273,26 @@ class IDRDatasetBase():
 
         #all_normals_cam = torch.stack(all_normals_cam, dim=0).float().to(self.rank)
 
-        
+        # Compute scene scaling via unified dispatcher
+        self.scene_center, self.scale_factor = compute_scene_scaling(
+            scaling_mode, sphere_scale,
+            scale_mat=cams['scale_mat_0'] if scaling_mode == 'scale_mat' else None,
+            cameras=idr_cameras_for_scaling if idr_cameras_for_scaling else None,
+            masks=idr_masks_for_scaling if idr_masks_for_scaling else None,
+            fg_area_ratio=fg_area_ratio,
+        )
+
+        # For scale_mat mode, normalization is already baked into the projection
+        # matrices (P = world_mat @ scale_mat), so all_c2w is already in normalized
+        # space — no further position scaling needed.
+        # For other modes, apply the computed scaling to camera positions.
+        if scaling_mode != 'scale_mat':
+            scene_center_t = torch.tensor(self.scene_center, dtype=torch.float32)
+            for i in range(len(self.all_c2w)):
+                self.all_c2w[i][:3, 3] = self.scale_factor * (
+                    self.all_c2w[i][:3, 3] - scene_center_t
+                )
+
         self.all_c2w, self.all_images, self.all_fg_masks = \
             torch.stack(self.all_c2w, dim=0).float().to(self.rank), \
             torch.stack(self.all_images, dim=0).float().to(self.rank), \
@@ -255,6 +318,10 @@ class IDRDatasetBase():
                 for light_idx in range(num_light_conditions):
                     self.test_render_combinations.append({'image_idx': img_idx, 'light_idx': light_idx})
             print(f"Test split: Prepared {len(self.test_render_combinations)} image-light combinations for rendering.")
+
+    def update_albedos(self, scaled_images_tensor):
+        """Called by two-phase training to replace albedos in-place."""
+        self.all_images = scaled_images_tensor.to(self.all_images.device)
 
 
 class IDRDataset(Dataset, IDRDatasetBase):
@@ -298,13 +365,13 @@ class IDRDataModule(pl.LightningDataModule):
         self.config = config
     
     def setup(self, stage=None):
-        if stage in [None, 'fit']:
+        if stage in [None, 'fit'] and not hasattr(self, 'train_dataset'):
             self.train_dataset = IDRIterableDataset(self.config, self.config.train_split)
-        if stage in [None, 'fit', 'validate']:
+        if stage in [None, 'fit', 'validate'] and not hasattr(self, 'val_dataset'):
             self.val_dataset = IDRDataset(self.config, self.config.val_split)
-        if stage in [None, 'test']:
+        if stage in [None, 'test'] and not hasattr(self, 'test_dataset'):
             self.test_dataset = IDRDataset(self.config, self.config.test_split)
-        if stage in [None, 'predict']:
+        if stage in [None, 'predict'] and not hasattr(self, 'predict_dataset'):
             self.predict_dataset = IDRDataset(self.config, self.config.train_split)
 
     def prepare_data(self):

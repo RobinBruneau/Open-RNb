@@ -7,6 +7,7 @@ dataset:
   scene: ???
   root_dir: ./data/${dataset.scene}
   img_downscale: 1.0
+  sphere_scale: 1.0
   train_split: "train"
   val_split: "val"
   test_split: "test"
@@ -39,7 +40,7 @@ model:
     grad_type: analytic
     isosurface:
       method: mc
-      resolution: 720
+      resolution: 512
       chunk: 2097152
       threshold: 0.
     xyz_encoding_config:
@@ -76,6 +77,11 @@ model:
 system:
   name: neus-system
   render_all_lights: true
+  save_images: false         # Set to true to save validation/test images
+  albedo_scaling:
+    enabled: null           # null = auto (enabled when albedos are present)
+    warmup_ratio: 0.1       # Fraction of total max_steps for phase 1
+    n_samples: 2000         # Samples per view for ratio computation
   loss:
     lambda_rendering_mse: 0.
     lambda_rendering_l1: 10.

@@ -10,8 +10,13 @@ import torchvision.transforms.functional as TF
 import pytorch_lightning as pl
 
 import datasets
+from datasets.utils import compute_scene_scaling
 from models.ray_utils import get_ray_directions
 from utils.misc import get_rank
+
+# World coordinate correction (flip Y and Z) — matches pyalicevisionlib convention.
+# AliceVision uses a Y-down/Z-forward native frame; this converts to Y-up world.
+WORLD_CORRECTION = np.diag([1.0, -1.0, -1.0])
 
 
 # =============================================================================
@@ -106,6 +111,10 @@ def _parse_sfm_json_data(data):
         # Camera center in world
         center = np.array([float(c) for c in transform['center']])
 
+        # Apply world coordinate correction (flip Y and Z)
+        R_cam2world = WORLD_CORRECTION @ R_cam2world
+        center = WORLD_CORRECTION @ center
+
         cameras.append({
             'view_id': view_id,
             'pose_id': pose_id,
@@ -127,6 +136,7 @@ def _parse_sfm_json_data(data):
                 pts.append([float(coord[0]), float(coord[1]), float(coord[2])])
         if pts:
             landmarks = np.array(pts)
+            landmarks = (WORLD_CORRECTION @ landmarks.T).T
 
     return cameras, landmarks
 
@@ -137,113 +147,6 @@ def load_sfm(sfm_path):
         return load_sfm_pyalicevision(sfm_path)
     except ImportError:
         return load_sfm_json(sfm_path)
-
-
-# =============================================================================
-# Scene scaling
-# =============================================================================
-
-def compute_scaling_from_landmarks(points_3d, sphere_scale=0.9):
-    """Compute scene center and scale from 3D landmarks.
-
-    Uses centroid + 99th percentile distance for robustness.
-
-    Returns:
-        center: (3,) array
-        scale: float (multiply positions by this to fit in unit sphere * sphere_scale)
-    """
-    center = np.mean(points_3d, axis=0)
-    distances = np.linalg.norm(points_3d - center, axis=1)
-    max_dist = np.percentile(distances, 99)
-    # Recompute center on inliers
-    inliers = points_3d[distances <= max_dist]
-    center = np.mean(inliers, axis=0)
-    max_dist = np.max(np.linalg.norm(inliers - center, axis=1))
-    if max_dist < 1e-8:
-        max_dist = 1.0
-    scale = sphere_scale / max_dist
-    return center, scale
-
-
-def compute_scaling_from_silhouettes(cameras, masks, sphere_scale=0.9, fg_area_ratio=5):
-    """Compute scene center and scale from silhouettes (MVSCPS method).
-
-    Center is estimated via mask center-of-mass triangulation (least-squares).
-    Radius is estimated via projected sphere area matching.
-
-    Args:
-        cameras: list of camera dicts (from load_sfm)
-        masks: list of (H, W) binary masks
-        sphere_scale: target sphere radius relative to model.radius
-        fg_area_ratio: ratio of sphere area to foreground area
-
-    Returns:
-        center: (3,) array
-        scale: float
-    """
-    from scipy.ndimage import center_of_mass
-
-    A = np.zeros((3, 3))
-    b = np.zeros(3)
-
-    cam_data = []
-    for cam, mask in zip(cameras, masks):
-        # Camera intrinsics
-        fx, fy = cam['fx'], cam['fy']
-        cx, cy = cam['cx'], cam['cy']
-        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-        K_inv = np.linalg.inv(K)
-
-        R_c2w = cam['R_cam2world']
-        center_cam = cam['center']
-
-        # Mask center of mass (row, col) -> (x_pixel, y_pixel)
-        com = center_of_mass(mask.astype(np.float64))
-        com_pixel = np.array([com[1], com[0], 1.0])  # (x, y, 1)
-
-        # Direction in camera space
-        dir_cam = K_inv @ com_pixel
-        dir_cam = dir_cam / np.linalg.norm(dir_cam)
-
-        # Direction in world space
-        m = R_c2w @ dir_cam
-        o = center_cam
-
-        # Accumulate least-squares: (I - m*m^T) * d = (I - m*m^T) * o
-        I_mmT = np.eye(3) - np.outer(m, m)
-        A += I_mmT
-        b += I_mmT @ o
-
-        cam_data.append((fx, fy, R_c2w, center_cam, mask))
-
-    # Solve for scene center
-    scene_center = np.linalg.lstsq(A, b, rcond=None)[0]
-
-    # Compute radius from projected sphere area
-    total_fg_area = 0
-    sum_fz2 = 0
-    for fx, fy, R_c2w, center_cam, mask in cam_data:
-        total_fg_area += mask.sum()
-        # Depth of scene center in this camera
-        R_w2c = R_c2w.T
-        center_in_cam = R_w2c @ (scene_center - center_cam)
-        Z = center_in_cam[2]
-        if abs(Z) < 1e-8:
-            Z = 1e-8
-        sum_fz2 += (fx / Z) ** 2
-
-    radius = np.sqrt(fg_area_ratio * total_fg_area / (np.pi * sum_fz2))
-    if radius < 1e-8:
-        radius = 1.0
-    scale = sphere_scale / radius
-
-    return scene_center, scale
-
-
-def compute_scaling_from_cameras(cameras, sphere_scale=0.9):
-    """Fallback: compute scaling from camera centers only."""
-    centers = np.array([c['center'] for c in cameras])
-    return compute_scaling_from_landmarks(centers, sphere_scale)
 
 
 # =============================================================================
@@ -347,18 +250,13 @@ class SfMDatasetBase():
 
         # Compute scene scaling
         scaling_mode = self.config.get('scaling_mode', 'auto')
-        sphere_scale = self.config.get('sphere_scale', 0.9)
+        sphere_scale = self.config.get('sphere_scale', 1.0)
+        fg_area_ratio = self.config.get('fg_area_ratio', 5)
 
-        if scaling_mode == 'landmarks' or (scaling_mode == 'auto' and landmarks is not None and len(landmarks) > 0):
-            scene_center, scene_scale = compute_scaling_from_landmarks(landmarks, sphere_scale)
-        elif scaling_mode == 'none':
-            scene_center = np.zeros(3)
-            scene_scale = 1.0
-        else:
-            # silhouettes mode or auto without landmarks — need masks first
-            # Will compute after loading masks below
-            scene_center = None
-            scene_scale = None
+        # Build pcd from landmarks if available
+        pcd = None
+        if landmarks is not None and len(landmarks) > 0:
+            pcd = landmarks
 
         # Load images, masks, normals per view
         self.all_c2w = []
@@ -370,7 +268,6 @@ class SfMDatasetBase():
         # Store metadata for albedo scaling
         self.albedo_paths = []
         self.camera_Ks = []
-        self.camera_c2ws = []  # c2w after Y/Z flip, before scaling (world coords)
 
         loaded_masks_for_scaling = []
         loaded_cameras_for_scaling = []
@@ -395,9 +292,6 @@ class SfMDatasetBase():
             c2w_flipped = c2w.clone()
             c2w_flipped[:3, 1:3] *= -1.
 
-            # Store UNFLIPPED c2w for albedo scaling — mesh is exported in original
-            # world coords (inverse scaling undoes the flip), so rays must match.
-            self.camera_c2ws.append(c2w[:4, :4].numpy())
             K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
             self.camera_Ks.append(K)
 
@@ -449,13 +343,29 @@ class SfMDatasetBase():
             # Store unscaled c2w (will apply scaling after all views loaded)
             self.all_c2w.append(c2w_flipped[:3, :4])
 
-        # Compute silhouette-based scaling if needed
-        if scene_center is None:
-            fg_area_ratio = self.config.get('fg_area_ratio', 5)
-            scene_center, scene_scale = compute_scaling_from_silhouettes(
-                loaded_cameras_for_scaling, loaded_masks_for_scaling,
-                sphere_scale, fg_area_ratio
-            )
+        # Scale intrinsics to match the downscaled mask resolution.
+        # loaded_cameras_for_scaling carries full-resolution fx/fy/cx/cy,
+        # but loaded_masks_for_scaling are at the downscaled resolution
+        # (H*factor x W*factor).  Without this correction total_fg_area
+        # shrinks by factor² while sum_fz2 stays constant, making radius
+        # proportional to 1/factor and scale proportional to 1/factor —
+        # i.e. scale_factor depends on img_downscale, which is wrong.
+        scaled_cams_for_sil = []
+        for cam in loaded_cameras_for_scaling:
+            scaled_cam = dict(cam)
+            scaled_cam['fx'] = cam['fx'] * self.factor
+            scaled_cam['fy'] = cam['fy'] * self.factor
+            scaled_cam['cx'] = cam['cx'] * self.factor
+            scaled_cam['cy'] = cam['cy'] * self.factor
+            scaled_cams_for_sil.append(scaled_cam)
+
+        scene_center, scene_scale = compute_scene_scaling(
+            scaling_mode, sphere_scale,
+            pcd=pcd,
+            cameras=scaled_cams_for_sil,
+            masks=loaded_masks_for_scaling,
+            fg_area_ratio=fg_area_ratio,
+        )
 
         # Apply scaling to camera positions
         scene_center_t = torch.tensor(scene_center, dtype=torch.float32)
@@ -478,7 +388,6 @@ class SfMDatasetBase():
             self.all_normals = self.all_normals[::jump]
             self.albedo_paths = self.albedo_paths[::jump]
             self.camera_Ks = self.camera_Ks[::jump]
-            self.camera_c2ws = self.camera_c2ws[::jump]
 
         # Stack into tensors
         self.all_c2w = torch.stack(self.all_c2w, dim=0).float().to(self.rank)

@@ -107,10 +107,10 @@ def main():
             CSVLogger(config.exp_dir, name=config.trial_name, version='csv_logs')
         ]
     
-    if sys.platform == 'win32':
-        # does not support multi-gpu on windows
+    if n_gpus == 1:
+        strategy = 'auto'
+    elif sys.platform == 'win32':
         strategy = 'dp'
-        assert n_gpus == 1
     else:
         strategy = 'ddp_find_unused_parameters_false'
     
@@ -127,15 +127,27 @@ def main():
         from pytorch_lightning.utilities.rank_zero import rank_zero_info
 
         albedo_cfg = config.system.get('albedo_scaling', {})
-        two_phase = albedo_cfg.get('enabled', False)
+        two_phase_explicit = albedo_cfg.get('enabled', None)
+
+        # Auto-detect: enable two-phase when albedos are present (unless explicitly disabled)
+        if two_phase_explicit is None:
+            has_albedos = False
+            ds = config.dataset
+            if ds.name == 'sfm' and ds.get('albedo_sfm', ''):
+                has_albedos = True
+            elif ds.name == 'idr' and os.path.isdir(os.path.join(ds.root_dir, 'albedo')):
+                has_albedos = True
+            two_phase = has_albedos
+        else:
+            two_phase = two_phase_explicit
 
         if two_phase:
             from utils.albedo_scaling import compute_albedo_scale_ratios, scale_albedo_images
+            import numpy as np
 
             total_steps = config.trainer.max_steps
             warmup_ratio = albedo_cfg.get('warmup_ratio', 0.1)
             phase1_steps = int(warmup_ratio * total_steps)
-            phase2_steps = total_steps - phase1_steps
 
             # Validate: rendering lambdas must be scalar (not schedules)
             for key in ['lambda_rendering_mse', 'lambda_rendering_l1']:
@@ -153,18 +165,23 @@ def main():
                 cfg.system.scheduler.schedulers[1].args.gamma = new_gamma
                 cfg.checkpoint.every_n_train_steps = max_steps
 
-            # ---- PHASE 1: geometry only (no rendering loss) ----
-            rank_zero_info(f"[TwoPhase] Phase 1: {phase1_steps} steps, no rendering loss")
+            # ---- PHASE 1: geometry only (no_albedo, rendering loss stays active) ----
+            rank_zero_info(f"[TwoPhase] Phase 1: {phase1_steps} steps, no_albedo=True (shading-only rendering)")
             config_p1 = copy.deepcopy(config)
             _recompute_scheduler(config_p1, phase1_steps)
-            config_p1.system.loss.lambda_rendering_mse = 0.
-            config_p1.system.loss.lambda_rendering_l1 = 0.
+            config_p1.model.no_albedo = True  # Freeze texture, force rgb=1
 
             system_p1 = systems.make(
                 config_p1.system.name, config_p1,
                 load_from_checkpoint=None if not args.resume_weights_only else args.resume
             )
             dm.setup('fit')  # Explicit setup before phase 1
+
+            # Force GT albedos to white for phase 1 (rendering = shading * 1.0)
+            ds = dm.train_dataloader().dataset
+            import torch as _torch
+            real_albedos = ds.all_images.clone()
+            ds.all_images = _torch.ones_like(ds.all_images)
 
             # Phase-specific callbacks (avoid stale state from shared callbacks)
             callbacks_p1 = [
@@ -183,39 +200,88 @@ def main():
             else:
                 trainer_p1.fit(system_p1, datamodule=dm)
 
+            # Restore real albedos (needed for albedo scaling)
+            ds.all_images = real_albedos
+
             # ---- ALBEDO SCALING: extract mesh + compute ratios ----
             rank_zero_info("[TwoPhase] Extracting intermediate mesh for albedo scaling")
-            mesh_res = albedo_cfg.get('mesh_resolution', 256)
-            old_res = system_p1.config.model.geometry.isosurface.resolution
-            system_p1.config.model.geometry.isosurface.resolution = mesh_res
-            mesh = system_p1.model.export(config.export)
-            system_p1.config.model.geometry.isosurface.resolution = old_res
+            system_p1.model.cuda()  # Ensure model is on GPU after trainer.fit()
+            mesh_res = 512  # Fixed resolution for intermediate mesh
+            # Recreate marching-cubes helper at desired resolution
+            from models.geometry import MarchingCubeHelper
+            geom = system_p1.model.geometry
+            use_torch = config.model.geometry.isosurface.method == 'mc-torch'
+            geom.helper = MarchingCubeHelper(mesh_res, use_torch=use_torch)
 
-            mesh_path = os.path.join(config.save_dir, 'intermediate_mesh.obj')
+            # Export WITHOUT vertex colors (useless in phase 1 with no_albedo).
+            # Export in normalized space: verts are in the same frame as all_c2w cameras
+            # (no inverse-scaling needed for albedo scaling / P2 renorm).
+            from copy import deepcopy
+            from datasets.utils import compute_scaling_from_mesh
+            export_cfg_p1 = deepcopy(config.export)
+            export_cfg_p1.export_vertex_color = False
+            export_cfg_p1.isosurface_space = 'normalized'
+            mesh = system_p1.model.export(export_cfg_p1)
+
+            import trimesh
+            verts_norm = mesh['v_pos'].cpu().numpy()  # P1-normalized space
+            faces = mesh['t_pos_idx'].cpu().numpy()
+            del mesh  # Free tensor memory
+
+            # Save intermediate mesh in WORLD space (for debug tools / external viewers).
+            # Inverse-transform: v_world = v_norm / p1_scale + p1_center
+            p1_center = np.array(ds.scene_center, dtype=np.float64)
+            p1_scale  = float(ds.scale_factor)
+            verts_world_inter = verts_norm / p1_scale + p1_center
             os.makedirs(config.save_dir, exist_ok=True)
-            system_p1.save_mesh('intermediate_mesh.obj', **mesh)
-
-            ds = dm.train_dataloader().dataset
-            scale_ratios = compute_albedo_scale_ratios(
-                albedo_images=[img.cpu().numpy() for img in ds.all_images],
-                camera_Ks=ds.camera_Ks,
-                camera_c2ws=ds.camera_c2ws,
-                mesh_path=mesh_path,
-                n_samples=albedo_cfg.get('n_samples', 2000),
+            trimesh.Trimesh(vertices=verts_world_inter, faces=faces).export(
+                os.path.join(config.save_dir, 'intermediate_mesh.ply')
             )
-            scaled = scale_albedo_images(ds.all_images, scale_ratios)
-            ds.update_albedos(scaled)
-            rank_zero_info(f"[TwoPhase] Albedos scaled. Mean ratios: {scale_ratios.mean(axis=0).tolist()}")
 
-            del system_p1, trainer_p1  # Free GPU memory
-            import gc, torch as _torch
+            # ---- SCENE RENORMALIZATION from intermediate mesh ----
+            # sphere_scale = config.dataset.get('sphere_scale', 0.9)  # old: used phase-1 scale
+            sphere_scale_p2 = 1.5  # Fill model sphere (radius=1.5) to minimize floater zones
+            new_center, new_scale = compute_scaling_from_mesh(verts_world_inter, sphere_scale=sphere_scale_p2)
+            ds.scene_center = new_center
+            ds.scale_factor = new_scale
+            rank_zero_info(f"[TwoPhase] Scene renormalized: center={new_center.tolist()}, scale={new_scale:.6f}")
+
+            # Free GPU memory BEFORE CPU-heavy albedo scaling (ray tracing)
+            del system_p1, trainer_p1
+            import gc
             gc.collect()
             _torch.cuda.empty_cache()
 
+            # Build mesh in normalized space (consistent with all_c2w cameras)
+            tri_mesh_norm = trimesh.Trimesh(vertices=verts_norm, faces=faces)
+
+            # Build normalized cameras from all_c2w (undo NeuS Y/Z flip)
+            all_c2w_np = ds.all_c2w.cpu().numpy()  # (N, 3, 4), normalized space, Y/Z flipped
+            norm_c2ws = []
+            for c2w34 in all_c2w_np:
+                c2w44 = np.eye(4, dtype=np.float64)
+                c2w44[:3, :4] = c2w34
+                c2w44[:3, 1:3] *= -1.  # undo NeuS Y/Z flip → standard convention
+                norm_c2ws.append(c2w44)
+
+            scale_ratios = compute_albedo_scale_ratios(
+                albedo_images=[img.cpu().numpy() for img in ds.all_images],
+                camera_Ks=ds.camera_Ks,
+                camera_c2ws=norm_c2ws,
+                tri_mesh=tri_mesh_norm,
+                n_samples=albedo_cfg.get('n_samples', 2000),
+            )
+            del tri_mesh_norm  # Free ray tracer BVH
+            scaled = scale_albedo_images(ds.all_images, scale_ratios)
+            ds.update_albedos(scaled)
+            rank_zero_info(f"[TwoPhase] Albedos scaled. Ratios per view: {scale_ratios.tolist()}")
+            rank_zero_info(f"[TwoPhase] Mean={scale_ratios.mean(axis=0).tolist()}, "
+                           f"Min={scale_ratios.min(axis=0).tolist()}, Max={scale_ratios.max(axis=0).tolist()}")
+
             # ---- PHASE 2: fresh model, full training with scaled albedos ----
-            rank_zero_info(f"[TwoPhase] Phase 2: {phase2_steps} steps, fresh model, rendering loss active")
+            rank_zero_info(f"[TwoPhase] Phase 2: {total_steps} steps, fresh model, rendering loss active")
             config_p2 = copy.deepcopy(config)
-            _recompute_scheduler(config_p2, phase2_steps)
+            _recompute_scheduler(config_p2, total_steps)
 
             system_p2 = systems.make(config_p2.system.name, config_p2)  # Fresh weights
             callbacks_p2 = [

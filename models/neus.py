@@ -118,8 +118,8 @@ class NeuSModel(BaseModel):
             if self.config.learned_background:
                 self.occupancy_grid_bg.every_n_step(step=global_step, occ_eval_fn=occ_eval_fn_bg, occ_thre=self.config.get('grid_prune_occ_thre_bg', 0.01))
 
-    def isosurface(self):
-        mesh = self.geometry.isosurface()
+    def isosurface(self, space: str = 'world'):
+        mesh = self.geometry.isosurface(space=space)
         return mesh
 
     def get_alpha(self, sdf, normal, dirs, dists):
@@ -288,7 +288,8 @@ class NeuSModel(BaseModel):
 
     @torch.no_grad()
     def export(self, export_config):
-        mesh = self.isosurface()
+        space = getattr(export_config, 'isosurface_space', 'world')
+        mesh = self.isosurface(space=space)
         if export_config.export_vertex_color:
             _, sdf_grad, feature = chunk_batch(self.geometry, export_config.chunk_size, False, True, mesh['v_pos'].to(self.rank), with_grad=True, with_feature=True)
             normal = F.normalize(sdf_grad, p=2, dim=-1)

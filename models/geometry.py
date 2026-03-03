@@ -103,7 +103,16 @@ class BaseImplicitGeometry(BaseModel):
         return mesh
 
     @torch.no_grad()
-    def isosurface(self):
+    def isosurface(self, space: str = 'world'):
+        """Extract isosurface mesh.
+
+        Args:
+            space: 'world'      — transform vertices back to world coordinates
+                                  (inverse-scaling applied, default behaviour).
+                   'normalized' — return vertices in the normalized training space
+                                  (no inverse-scaling), useful for phase-1 export
+                                  when the caller needs to work in normalized space.
+        """
         if self.config.isosurface is None:
             raise NotImplementedError
         mesh_coarse = self.isosurface_((-self.radius, -self.radius, -self.radius), (self.radius, self.radius, self.radius))
@@ -111,9 +120,11 @@ class BaseImplicitGeometry(BaseModel):
         vmin_ = (vmin - (vmax - vmin) * 0.1).clamp(-self.radius, self.radius)
         vmax_ = (vmax + (vmax - vmin) * 0.1).clamp(-self.radius, self.radius)
         mesh_fine = self.isosurface_(vmin_, vmax_)
-        # Transform mesh from normalized space back to world coordinates
-        if self.scale_factor.item() != 1.0 or self.scene_center.abs().sum().item() > 0:
-            mesh_fine['v_pos'] = mesh_fine['v_pos'] / self.scale_factor + self.scene_center
+        if space == 'world':
+            # Transform mesh from normalized space back to world coordinates
+            if self.scale_factor.item() != 1.0 or self.scene_center.abs().sum().item() > 0:
+                dev = mesh_fine['v_pos'].device
+                mesh_fine['v_pos'] = mesh_fine['v_pos'] / self.scale_factor.to(dev) + self.scene_center.to(dev)
         return mesh_fine
 
 

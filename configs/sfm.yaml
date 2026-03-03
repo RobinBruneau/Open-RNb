@@ -9,7 +9,7 @@ dataset:
   albedo_sfm: ""           # Optional: path to albedo SfMData
   mask_sfm: ""             # Optional: path to mask SfMData
   scaling_mode: auto       # auto | landmarks | silhouettes | none
-  sphere_scale: 0.9
+  sphere_scale: 1.0
   fg_area_ratio: 5
   img_downscale: 1.0
   train_split: "train"
@@ -44,7 +44,7 @@ model:
     grad_type: analytic
     isosurface:
       method: mc
-      resolution: 720
+      resolution: 512
       chunk: 2097152
       threshold: 0.
     xyz_encoding_config:
@@ -81,11 +81,11 @@ model:
 system:
   name: neus-system
   render_all_lights: true
+  save_images: false         # Set to true to save validation/test images
   albedo_scaling:
-    enabled: false          # Auto-enabled when albedo_sfm is provided
+    enabled: null           # null = auto (enabled when albedos are present)
     warmup_ratio: 0.1       # Fraction of total max_steps for phase 1
     n_samples: 2000         # Samples per view for ratio computation
-    mesh_resolution: 256    # Lower resolution for intermediate mesh (faster)
   loss:
     lambda_rendering_mse: 0.
     lambda_rendering_l1: 10.

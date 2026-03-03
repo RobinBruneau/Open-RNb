@@ -10,7 +10,8 @@ import trimesh
 from scipy.interpolate import RegularGridInterpolator
 
 
-def compute_albedo_scale_ratios(albedo_images, camera_Ks, camera_c2ws, mesh_path, n_samples=2000):
+def compute_albedo_scale_ratios(albedo_images, camera_Ks, camera_c2ws,
+                                mesh_path=None, tri_mesh=None, n_samples=2000):
     """
     Compute per-view albedo scaling ratios via multi-view consistency.
 
@@ -29,13 +30,19 @@ def compute_albedo_scale_ratios(albedo_images, camera_Ks, camera_c2ws, mesh_path
         albedo_images: list of np.array (H, W, 3) — albedo images in [0, 1]
         camera_Ks: list of (3,3) intrinsic matrices
         camera_c2ws: list of (4,4) or (3,4) cam-to-world matrices
-        mesh_path: path to OBJ mesh for ray tracing
+        mesh_path: path to OBJ mesh for ray tracing (used if tri_mesh not given)
+        tri_mesh: pre-built trimesh.Trimesh object (avoids OBJ reload)
         n_samples: number of pixel samples per view
 
     Returns:
         scale_ratios: np.array (N, 3) — per-view RGB scale factors
     """
-    mesh = trimesh.load_mesh(mesh_path)
+    if tri_mesh is not None:
+        mesh = tri_mesh
+    elif mesh_path is not None:
+        mesh = trimesh.load_mesh(mesh_path)
+    else:
+        raise ValueError("Either tri_mesh or mesh_path must be provided")
     n_views = len(albedo_images)
 
     # Build masks from albedo images (non-zero pixels)
