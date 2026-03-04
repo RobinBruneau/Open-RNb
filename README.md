@@ -10,7 +10,7 @@ No proprietary CUDA libraries &mdash; runs out of the box with standard PyTorch 
 
 [**Baptiste Brument**](https://bbrument.github.io/)<sup><span>&#9733;</span></sup> · [**Robin Bruneau**](https://robinbruneau.github.io/)<sup><span>&#9733;</span></sup>
 <br>
-[**Yvain Quéau**](https://yqueau.github.io/) · [**Jean Mélou**](https://www.irit.fr/~Jean.Melou/) · [**François Lauze**](https://loutchoa.github.io/) · [**Jean-Denis Durou**](https://www.irit.fr/~Jean-Denis.Durou/) · [**Lilian Calvet**](https://scholar.google.com/citations?user=6JewdrMAAAAJ&hl=en)
+[**Yvain Quéau**](https://yqueau.github.io/) · [**Jean Mélou**](https://www.irit.fr/~Jean.Melou/) · [**François Lauze**](https://loutchoa.github.io/) · [**Jean-Denis Durou**](https://cv.hal.science/jean-denis-durou) · [**Lilian Calvet**](https://scholar.google.com/citations?user=6JewdrMAAAAJ&hl=en)
 
 <span>&#9733;</span> corresponding authors
 
@@ -35,7 +35,7 @@ This project is developed as part of [**DOPAMIn**](https://www.cnrsinnovation.co
 
 **OPEN** is a CNRS programme that supports the valorization of open-source scientific software by providing dedicated developer resources, governance expertise, and industry partnership support. DOPAMIn aims to strengthen the [AliceVision](https://alicevision.org/)/[Meshroom](https://alicevision.org/#meshroom) photogrammetry ecosystem, a 3D reconstruction pipeline with over 2 million downloads used in visual effects, archaeology, biology, and industrial inspection.
 
-**Lead researcher:** [Jean-Denis Durou](https://www.irit.fr/~Jean-Denis.Durou/), [IRIT](https://www.irit.fr/) (CNRS / Université Toulouse III &ndash; Paul Sabatier)
+**Lead researcher:** [Jean-Denis Durou](https://cv.hal.science/jean-denis-durou), [IRIT](https://www.irit.fr/) (CNRS / Université Toulouse III &ndash; Paul Sabatier)
 
 ## Features
 
