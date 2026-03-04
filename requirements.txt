@@ -11,3 +11,4 @@ pyransac3d
 torch_efficient_distloss
 tensorboard
 trimesh[easy]
+psutil
