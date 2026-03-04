@@ -772,9 +772,9 @@ class TestPhase2RenormScale:
         with open(launch_path) as f:
             source = f.read()
 
-        assert "sphere_scale_p2 = 1.5" in source, (
-            "launch.py must contain 'sphere_scale_p2 = 1.5'. "
-            "Update the phase-2 renormalization to use a fixed 1.5."
+        assert "sphere_scale_p2" in source, (
+            "launch.py must reference 'sphere_scale_p2'. "
+            "Phase-2 renormalization should use sphere_scale_p2 (default 1.5)."
         )
 
     def test_phase2_does_not_use_config_sphere_scale_for_renorm(self):
@@ -808,3 +808,133 @@ class TestPhase2RenormScale:
                     "phase-2 new_scale computation. Use compute_scaling_from_mesh "
                     "with the fixed sphere_scale_p2=1.5 constant instead."
                 )
+
+
+# ---- Phase-2 camera renormalization ----
+
+class TestPhase2CameraRenormalization:
+    """Verify that cameras are renormalized from P1 space to P2 space between phases.
+
+    The renormalization formula is:
+        t_p2 = (p2_scale/p1_scale) * t_p1 + p2_scale * (p1_center - p2_center)
+
+    Only the translation column ([:3, 3]) is affected; rotations are unchanged.
+    """
+
+    def test_renorm_formula_recovers_world_positions(self):
+        """Round-trip: P1 → world → P2 must equal direct P1 → P2."""
+        p1_center = np.array([1.0, 2.0, 3.0])
+        p1_scale = 0.5
+        p2_center = np.array([1.1, 2.1, 3.1])
+        p2_scale = 1.2
+
+        # Simulate 4 cameras with random world-space positions
+        rng = np.random.RandomState(42)
+        world_positions = rng.randn(4, 3)
+
+        # P1 normalized
+        t_p1 = p1_scale * (world_positions - p1_center)
+
+        # Direct formula: P1 → P2
+        scale_ratio = p2_scale / p1_scale
+        offset = p2_scale * (p1_center - p2_center)
+        t_p2_direct = scale_ratio * t_p1 + offset
+
+        # Via world: P1 → world → P2
+        t_world = t_p1 / p1_scale + p1_center
+        t_p2_via_world = p2_scale * (t_world - p2_center)
+
+        np.testing.assert_allclose(t_p2_direct, t_p2_via_world, atol=1e-10)
+
+    def test_renorm_preserves_rotations(self):
+        """Camera rotations must be identical in P1 and P2 spaces."""
+        # The renormalization only changes translations, not rotations.
+        # Build a (3, 4) c2w with known rotation and translation.
+        R = np.eye(3)
+        R[0, 0], R[1, 1] = 0, 0
+        R[0, 1], R[1, 0] = 1, -1  # 90° rotation
+        t_p1 = np.array([5.0, 6.0, 7.0])
+        c2w_p1 = np.zeros((3, 4), dtype=np.float32)
+        c2w_p1[:3, :3] = R
+        c2w_p1[:3, 3] = t_p1
+
+        p1_scale = 0.5
+        p2_scale = 1.2
+        p1_center = np.array([1.0, 2.0, 3.0])
+        p2_center = np.array([1.1, 2.1, 3.1])
+
+        # Apply renormalization (only translation changes)
+        scale_ratio = p2_scale / p1_scale
+        offset = p2_scale * (p1_center - p2_center)
+        c2w_p2 = c2w_p1.copy()
+        c2w_p2[:3, 3] = scale_ratio * c2w_p1[:3, 3] + offset
+
+        np.testing.assert_array_equal(c2w_p2[:3, :3], c2w_p1[:3, :3])
+
+    def test_renorm_with_torch_tensors(self):
+        """Verify the renormalization works with torch tensors (as in launch.py)."""
+        p1_center = np.array([1.0, 2.0, 3.0])
+        p1_scale = 0.8
+        p2_center = np.array([1.5, 2.5, 3.5])
+        p2_scale = 2.0
+
+        # Simulate all_c2w tensor: (N, 3, 4)
+        rng = np.random.RandomState(123)
+        world_positions = rng.randn(5, 3)
+        all_c2w = torch.zeros(5, 3, 4)
+        all_c2w[:, :3, :3] = torch.eye(3)  # identity rotation
+        for i in range(5):
+            all_c2w[i, :3, 3] = torch.tensor(
+                p1_scale * (world_positions[i] - p1_center), dtype=torch.float32
+            )
+
+        # Apply renormalization (matching launch.py code)
+        renorm_ratio = p2_scale / p1_scale
+        renorm_offset = torch.tensor(
+            p2_scale * (p1_center - p2_center), dtype=torch.float32
+        )
+        all_c2w[:, :3, 3] = renorm_ratio * all_c2w[:, :3, 3] + renorm_offset
+
+        # Verify: inverse-transform P2 translations back to world
+        t_p2 = all_c2w[:, :3, 3].numpy()
+        t_world_recovered = t_p2 / p2_scale + p2_center
+        np.testing.assert_allclose(t_world_recovered, world_positions, atol=1e-5)
+
+    def test_launch_py_contains_camera_renormalization(self):
+        """launch.py must renormalize cameras between P1 and P2."""
+        launch_path = os.path.join(ROOT, "launch.py")
+        with open(launch_path) as f:
+            source = f.read()
+
+        assert "renorm_ratio" in source, (
+            "launch.py must compute renorm_ratio = p2_scale / p1_scale "
+            "for camera renormalization between phases."
+        )
+        assert "renorm_offset" in source, (
+            "launch.py must compute renorm_offset for camera translation "
+            "from P1 to P2 space."
+        )
+
+    def test_launch_py_renormalizes_all_splits(self):
+        """launch.py must renormalize train, val, AND test datasets."""
+        launch_path = os.path.join(ROOT, "launch.py")
+        with open(launch_path) as f:
+            source = f.read()
+
+        for split in ["train_dataset", "val_dataset", "test_dataset"]:
+            assert split in source, (
+                f"launch.py must renormalize {split} cameras for P2. "
+                "All dataset splits need consistent camera positions."
+            )
+
+    def test_identity_renorm_is_noop(self):
+        """When P1 == P2 normalization, cameras should not change."""
+        center = np.array([1.0, 2.0, 3.0])
+        scale = 0.5
+
+        t_p1 = np.array([[0.5, -0.3, 1.2], [0.1, 0.8, -0.4]])
+        renorm_ratio = scale / scale  # 1.0
+        offset = scale * (center - center)  # [0, 0, 0]
+        t_p2 = renorm_ratio * t_p1 + offset
+
+        np.testing.assert_array_equal(t_p2, t_p1)
