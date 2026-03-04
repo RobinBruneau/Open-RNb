@@ -12,7 +12,7 @@ import torchvision.transforms.functional as TF
 import pytorch_lightning as pl
 
 import datasets
-from datasets.utils import compute_scene_scaling
+from datasets.utils import SCALE_MAT, compute_scene_scaling, make_K
 from models.ray_utils import get_ray_directions
 from utils.misc import get_rank
 
@@ -176,7 +176,7 @@ class IDRDatasetBase():
         n_images = max([int(k.split('_')[-1]) for k in cams.keys()]) + 1
 
         # Config-driven scaling parameters
-        scaling_mode = self.config.get('scaling_mode', 'scale_mat')
+        scaling_mode = self.config.get('scaling_mode', SCALE_MAT)
         sphere_scale = self.config.get('sphere_scale', 1.0)
         fg_area_ratio = self.config.get('fg_area_ratio', 5.0)
 
@@ -198,7 +198,7 @@ class IDRDatasetBase():
             c2w_[:3,1:3] *= -1. # flip input sign
             self.all_c2w.append(c2w_[:3,:4])
 
-            self.camera_Ks.append(np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32))
+            self.camera_Ks.append(make_K(fx, fy, cx, cy))
 
             img_path = os.path.join(self.config.root_dir, 'albedo', f'{i:0{self._n_digits}d}.png')
             self.albedo_paths.append(img_path)
@@ -241,7 +241,7 @@ class IDRDatasetBase():
             # c2w from load_K_Rt_from_P gives cam2world in *normalized* space (scale_mat applied)
             # For other modes we need world-space camera center from the unscaled pose.
             # The unscaled c2w is obtained by P = world_mat[:3,:4] (no scale_mat).
-            if scaling_mode != 'scale_mat':
+            if scaling_mode != SCALE_MAT:
                 world_mat_only = cams[f'world_mat_{i}']
                 P_world = world_mat_only[:3, :4]
                 K_w, c2w_world = load_K_Rt_from_P(P_world)
@@ -276,7 +276,7 @@ class IDRDatasetBase():
         # Compute scene scaling via unified dispatcher
         self.scene_center, self.scale_factor = compute_scene_scaling(
             scaling_mode, sphere_scale,
-            scale_mat=cams['scale_mat_0'] if scaling_mode == 'scale_mat' else None,
+            scale_mat=cams['scale_mat_0'] if scaling_mode == SCALE_MAT else None,
             cameras=idr_cameras_for_scaling if idr_cameras_for_scaling else None,
             masks=idr_masks_for_scaling if idr_masks_for_scaling else None,
             fg_area_ratio=fg_area_ratio,
@@ -286,7 +286,7 @@ class IDRDatasetBase():
         # matrices (P = world_mat @ scale_mat), so all_c2w is already in normalized
         # space — no further position scaling needed.
         # For other modes, apply the computed scaling to camera positions.
-        if scaling_mode != 'scale_mat':
+        if scaling_mode != SCALE_MAT:
             scene_center_t = torch.tensor(self.scene_center, dtype=torch.float32)
             for i in range(len(self.all_c2w)):
                 self.all_c2w[i][:3, 3] = self.scale_factor * (

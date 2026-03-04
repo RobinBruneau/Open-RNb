@@ -5,6 +5,48 @@ All functions are numpy-only (no torch, no PyTorch Lightning).
 import numpy as np
 
 
+# ---------------------------------------------------------------------------
+# Constants — use these instead of raw strings to avoid silent typos.
+# ---------------------------------------------------------------------------
+
+SCALE_MAT = 'scale_mat'
+PCD = 'pcd'
+SILHOUETTES = 'silhouettes'
+CAMERAS = 'cameras'
+AUTO = 'auto'
+NONE = 'none'
+
+VALID_SCALING_MODES = {SCALE_MAT, PCD, SILHOUETTES, CAMERAS, AUTO, NONE}
+
+SPACE_WORLD = 'world'
+SPACE_NORMALIZED = 'normalized'
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+def make_K(fx, fy, cx, cy, dtype=np.float32):
+    """Build a 3x3 camera intrinsic matrix."""
+    return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=dtype)
+
+
+def neus_c2w_to_standard(c2w34):
+    """Convert a NeuS (3,4) c2w (Y/Z flipped) to a standard (4,4) cam-to-world."""
+    c2w44 = np.eye(4, dtype=np.float64)
+    c2w44[:3, :4] = c2w34
+    c2w44[:3, 1:3] *= -1.
+    return c2w44
+
+
+def scale_camera_intrinsics(cameras, factor):
+    """Return a copy of each camera dict with fx/fy/cx/cy scaled by *factor*."""
+    return [{**cam,
+             'fx': cam['fx'] * factor, 'fy': cam['fy'] * factor,
+             'cx': cam['cx'] * factor, 'cy': cam['cy'] * factor}
+            for cam in cameras]
+
+
 def compute_scaling_from_scale_mat(scale_mat_0):
     """Extract (scene_center, scale_factor) from a scale_mat (IDR/cameras.npz format).
 
@@ -205,26 +247,32 @@ def compute_scene_scaling(scaling_mode, sphere_scale, scale_mat=None, pcd=None,
         scene_center: (3,) numpy array
         scale_factor: float
     """
-    if scaling_mode == 'none':
+    if scaling_mode not in VALID_SCALING_MODES:
+        raise ValueError(
+            f"Unknown scaling_mode={scaling_mode!r}. "
+            f"Expected one of: {VALID_SCALING_MODES}."
+        )
+
+    if scaling_mode == NONE:
         return np.zeros(3), 1.0
 
-    if scaling_mode == 'scale_mat':
+    if scaling_mode == SCALE_MAT:
         if scale_mat is None:
             raise ValueError("scale_mat must be provided when scaling_mode='scale_mat'")
         return compute_scaling_from_scale_mat(scale_mat)
 
-    if scaling_mode == 'pcd':
+    if scaling_mode == PCD:
         return compute_scaling_from_pcd(pcd, sphere_scale)
 
-    if scaling_mode == 'silhouettes':
+    if scaling_mode == SILHOUETTES:
         return compute_scaling_from_silhouettes(
             cameras, masks, sphere_scale=sphere_scale, fg_area_ratio=fg_area_ratio
         )
 
-    if scaling_mode == 'cameras':
+    if scaling_mode == CAMERAS:
         return compute_scaling_from_cameras(cameras, sphere_scale)
 
-    if scaling_mode == 'auto':
+    if scaling_mode == AUTO:
         # Try pcd first
         has_pcd = pcd is not None and len(pcd) > 0
         if has_pcd:
@@ -244,8 +292,3 @@ def compute_scene_scaling(scaling_mode, sphere_scale, scale_mat=None, pcd=None,
 
         # Nothing available
         return np.zeros(3), 1.0
-
-    raise ValueError(
-        f"Unknown scaling_mode={scaling_mode!r}. "
-        "Expected one of: 'scale_mat', 'pcd', 'silhouettes', 'cameras', 'auto', 'none'."
-    )

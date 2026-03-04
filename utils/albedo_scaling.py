@@ -61,6 +61,17 @@ def compute_albedo_scale_ratios(albedo_images, camera_Ks, camera_c2ws,
 
     h, w = albedo_images[0].shape[:2]
 
+    # Pre-build interpolators for all views (avoid rebuilding per neighbor)
+    rows_inds = np.arange(h)
+    cols_inds = np.arange(w)
+    interpolators = []
+    for img in albedo_images:
+        img_f = img.astype(np.float32)
+        interp_r = RegularGridInterpolator((rows_inds, cols_inds), img_f[:, :, 0])
+        interp_g = RegularGridInterpolator((rows_inds, cols_inds), img_f[:, :, 1])
+        interp_b = RegularGridInterpolator((rows_inds, cols_inds), img_f[:, :, 2])
+        interpolators.append((interp_r, interp_g, interp_b))
+
     # Storage for ratios between neighboring views
     ratios = np.zeros((n_views, n_samples, 3, 2), dtype=np.float32)
     intersection_found = np.zeros((n_views, n_samples, 2), dtype=np.bool_)
@@ -151,13 +162,8 @@ def compute_albedo_scale_ratios(albedo_images, camera_Ks, camera_c2ws,
             if len(vis_index_ray) == 0:
                 continue
 
-            # Bilinear interpolate neighbor albedo
-            neigh_img = albedo_images[neigh_cam_id].astype(np.float32)
-            rows_inds = np.arange(h)
-            cols_inds = np.arange(w)
-            interp_r = RegularGridInterpolator((rows_inds, cols_inds), neigh_img[:, :, 0])
-            interp_g = RegularGridInterpolator((rows_inds, cols_inds), neigh_img[:, :, 1])
-            interp_b = RegularGridInterpolator((rows_inds, cols_inds), neigh_img[:, :, 2])
+            # Bilinear interpolate neighbor albedo (using pre-built interpolators)
+            interp_r, interp_g, interp_b = interpolators[neigh_cam_id]
 
             pts_yx = np.stack([pts_2d[:, 1], pts_2d[:, 0]], axis=1)
             neigh_albedo = np.stack([interp_r(pts_yx), interp_g(pts_yx), interp_b(pts_yx)], axis=1)

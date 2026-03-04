@@ -10,7 +10,7 @@ import torchvision.transforms.functional as TF
 import pytorch_lightning as pl
 
 import datasets
-from datasets.utils import compute_scene_scaling
+from datasets.utils import AUTO, compute_scene_scaling, make_K, scale_camera_intrinsics
 from models.ray_utils import get_ray_directions
 from utils.misc import get_rank
 
@@ -249,7 +249,7 @@ class SfMDatasetBase():
         self.factor = w / W_orig
 
         # Compute scene scaling
-        scaling_mode = self.config.get('scaling_mode', 'auto')
+        scaling_mode = self.config.get('scaling_mode', AUTO)
         sphere_scale = self.config.get('sphere_scale', 1.0)
         fg_area_ratio = self.config.get('fg_area_ratio', 5)
 
@@ -292,7 +292,7 @@ class SfMDatasetBase():
             c2w_flipped = c2w.clone()
             c2w_flipped[:3, 1:3] *= -1.
 
-            K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
+            K = make_K(fx, fy, cx, cy)
             self.camera_Ks.append(K)
 
             # Load normal image
@@ -350,14 +350,7 @@ class SfMDatasetBase():
         # shrinks by factor² while sum_fz2 stays constant, making radius
         # proportional to 1/factor and scale proportional to 1/factor —
         # i.e. scale_factor depends on img_downscale, which is wrong.
-        scaled_cams_for_sil = []
-        for cam in loaded_cameras_for_scaling:
-            scaled_cam = dict(cam)
-            scaled_cam['fx'] = cam['fx'] * self.factor
-            scaled_cam['fy'] = cam['fy'] * self.factor
-            scaled_cam['cx'] = cam['cx'] * self.factor
-            scaled_cam['cy'] = cam['cy'] * self.factor
-            scaled_cams_for_sil.append(scaled_cam)
+        scaled_cams_for_sil = scale_camera_intrinsics(loaded_cameras_for_scaling, self.factor)
 
         scene_center, scene_scale = compute_scene_scaling(
             scaling_mode, sphere_scale,

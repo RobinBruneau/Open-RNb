@@ -1,3 +1,4 @@
+import torch
 import pytorch_lightning as pl
 
 import models
@@ -111,6 +112,20 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         Purge repeated results using data index.
         """
         raise NotImplementedError
+
+    def _aggregate_psnr(self, outputs, metric_prefix):
+        """Gather PSNR outputs from all devices, deduplicate by index, log mean."""
+        out = self.all_gather(outputs)
+        if self.trainer.is_global_zero:
+            out_set = {}
+            for step_out in out:
+                if step_out['index'].ndim == 1:
+                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr']}
+                else:
+                    for oi, index in enumerate(step_out['index']):
+                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
+            psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
+            self.log(f'{metric_prefix}/psnr', psnr, prog_bar=True, rank_zero_only=True)
 
     def export(self):
         raise NotImplementedError

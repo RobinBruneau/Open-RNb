@@ -95,7 +95,7 @@ class NeuSSystem(BaseSystem):
         """Propagate scene scaling from dataset to geometry for inverse scaling at export.
         Runs unconditionally — any sfm dataset needs inverse scaling, even without albedo scaling."""
         import torch
-        ds = self.trainer.datamodule.train_dataloader().dataset
+        ds = self.trainer.datamodule.train_dataset
         if hasattr(ds, 'scale_factor'):
             self.model.geometry.scene_center.copy_(
                 torch.tensor(ds.scene_center, dtype=torch.float32))
@@ -462,19 +462,7 @@ class NeuSSystem(BaseSystem):
     """
     
     def on_validation_epoch_end(self):
-        out = self.all_gather(self._validation_outputs)
-        if self.trainer.is_global_zero:
-            out_set = {}
-            for step_out in out:
-                # DP
-                if step_out['index'].ndim == 1:
-                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr']}
-                # DDP
-                else:
-                    for oi, index in enumerate(step_out['index']):
-                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
-            psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
-            self.log('val/psnr', psnr, prog_bar=True, rank_zero_only=True)
+        self._aggregate_psnr(self._validation_outputs, 'val')
 
     def on_test_epoch_start(self):
         self._test_outputs = []
@@ -499,20 +487,9 @@ class NeuSSystem(BaseSystem):
         return step_out
 
     def on_test_epoch_end(self):
-        out = self.all_gather(self._test_outputs)
-        if self.trainer.is_global_zero:
-            out_set = {}
-            for step_out in out:
-                # DP
-                if step_out['index'].ndim == 1:
-                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr']}
-                # DDP
-                else:
-                    for oi, index in enumerate(step_out['index']):
-                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
-            psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
-            self.log('test/psnr', psnr, prog_bar=True, rank_zero_only=True)
+        self._aggregate_psnr(self._test_outputs, 'test')
 
+        if self.trainer.is_global_zero:
             self.export()
     
     def export(self):
