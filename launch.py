@@ -142,8 +142,16 @@ def main():
             two_phase = two_phase_explicit
 
         if two_phase:
-            from utils.albedo_scaling import compute_albedo_scale_ratios, scale_albedo_images
+            import gc
+            from copy import deepcopy
             import numpy as np
+            import torch as _torch
+            import trimesh
+            from datasets.utils import (
+                compute_scaling_from_mesh, neus_c2w_to_standard, SPACE_NORMALIZED,
+            )
+            from models.geometry import MarchingCubeHelper
+            from utils.albedo_scaling import compute_albedo_scale_ratios, scale_albedo_images
 
             total_steps = config.trainer.max_steps
             warmup_ratio = albedo_cfg.get('warmup_ratio', 0.1)
@@ -178,9 +186,9 @@ def main():
             dm.setup('fit')  # Explicit setup before phase 1
 
             # Force GT albedos to white for phase 1 (rendering = shading * 1.0)
+            # ds is the same object as dm.train_dataset (DataLoader wraps it directly)
             ds = dm.train_dataloader().dataset
-            import torch as _torch
-            real_albedos = ds.all_images.clone()
+            real_albedos = ds.all_images  # Save reference before overwriting
             ds.all_images = _torch.ones_like(ds.all_images)
 
             # Phase-specific callbacks (avoid stale state from shared callbacks)
@@ -206,9 +214,8 @@ def main():
             # ---- ALBEDO SCALING: extract mesh + compute ratios ----
             rank_zero_info("[TwoPhase] Extracting intermediate mesh for albedo scaling")
             system_p1.model.cuda()  # Ensure model is on GPU after trainer.fit()
-            mesh_res = 512  # Fixed resolution for intermediate mesh
+            mesh_res = albedo_cfg.get('intermediate_mesh_resolution', 512)
             # Recreate marching-cubes helper at desired resolution
-            from models.geometry import MarchingCubeHelper
             geom = system_p1.model.geometry
             use_torch = config.model.geometry.isosurface.method == 'mc-torch'
             geom.helper = MarchingCubeHelper(mesh_res, use_torch=use_torch)
@@ -216,17 +223,14 @@ def main():
             # Export WITHOUT vertex colors (useless in phase 1 with no_albedo).
             # Export in normalized space: verts are in the same frame as all_c2w cameras
             # (no inverse-scaling needed for albedo scaling / P2 renorm).
-            from copy import deepcopy
-            from datasets.utils import compute_scaling_from_mesh
             export_cfg_p1 = deepcopy(config.export)
             export_cfg_p1.export_vertex_color = False
-            export_cfg_p1.isosurface_space = 'normalized'
+            export_cfg_p1.isosurface_space = SPACE_NORMALIZED
             mesh = system_p1.model.export(export_cfg_p1)
 
-            import trimesh
             verts_norm = mesh['v_pos'].cpu().numpy()  # P1-normalized space
             faces = mesh['t_pos_idx'].cpu().numpy()
-            del mesh  # Free tensor memory
+            del mesh  # Drop reference so GPU tensors can be GC'd
 
             # Save intermediate mesh in WORLD space (for debug tools / external viewers).
             # Inverse-transform: v_world = v_norm / p1_scale + p1_center
@@ -239,30 +243,25 @@ def main():
             )
 
             # ---- SCENE RENORMALIZATION from intermediate mesh ----
-            # sphere_scale = config.dataset.get('sphere_scale', 0.9)  # old: used phase-1 scale
-            sphere_scale_p2 = 1.5  # Fill model sphere (radius=1.5) to minimize floater zones
+            sphere_scale_p2 = albedo_cfg.get('sphere_scale_p2', 1.5)
             new_center, new_scale = compute_scaling_from_mesh(verts_world_inter, sphere_scale=sphere_scale_p2)
-            ds.scene_center = new_center
-            ds.scale_factor = new_scale
+            # NOTE: ds.scene_center / ds.scale_factor are NOT updated yet —
+            # they stay at P1 values so albedo scaling (below) uses consistent
+            # P1-space cameras + mesh. All splits are updated in the renorm loop.
             rank_zero_info(f"[TwoPhase] Scene renormalized: center={new_center.tolist()}, scale={new_scale:.6f}")
 
             # Free GPU memory BEFORE CPU-heavy albedo scaling (ray tracing)
             del system_p1, trainer_p1
-            import gc
             gc.collect()
             _torch.cuda.empty_cache()
 
-            # Build mesh in normalized space (consistent with all_c2w cameras)
+            # Both tri_mesh_norm and all_c2w are in P1-normalized space here.
+            # Camera renormalization to P2 happens AFTER albedo scaling (see below).
             tri_mesh_norm = trimesh.Trimesh(vertices=verts_norm, faces=faces)
 
             # Build normalized cameras from all_c2w (undo NeuS Y/Z flip)
             all_c2w_np = ds.all_c2w.cpu().numpy()  # (N, 3, 4), normalized space, Y/Z flipped
-            norm_c2ws = []
-            for c2w34 in all_c2w_np:
-                c2w44 = np.eye(4, dtype=np.float64)
-                c2w44[:3, :4] = c2w34
-                c2w44[:3, 1:3] *= -1.  # undo NeuS Y/Z flip → standard convention
-                norm_c2ws.append(c2w44)
+            norm_c2ws = [neus_c2w_to_standard(c2w34) for c2w34 in all_c2w_np]
 
             scale_ratios = compute_albedo_scale_ratios(
                 albedo_images=[img.cpu().numpy() for img in ds.all_images],
@@ -277,6 +276,27 @@ def main():
             rank_zero_info(f"[TwoPhase] Albedos scaled. Ratios per view: {scale_ratios.tolist()}")
             rank_zero_info(f"[TwoPhase] Mean={scale_ratios.mean(axis=0).tolist()}, "
                            f"Min={scale_ratios.min(axis=0).tolist()}, Max={scale_ratios.max(axis=0).tolist()}")
+
+            # ---- RENORMALIZE CAMERAS P1 → P2 ----
+            # Camera translations are still in P1 space: t_p1 = p1_scale * (t_world - p1_center)
+            # Convert to P2 space: t_p2 = (p2_scale/p1_scale) * t_p1 + p2_scale * (p1_center - p2_center)
+            # predict_dataset is excluded: it is lazily created only on dm.setup('predict'),
+            # which is never called in two-phase training.
+            dm.setup('test')  # Ensure test_dataset exists before renormalization
+            p2_scale = float(new_scale)
+            p2_center = np.array(new_center, dtype=np.float64)
+            renorm_ratio = p2_scale / p1_scale
+            renorm_offset = _torch.tensor(
+                p2_scale * (p1_center - p2_center), dtype=_torch.float32
+            )
+            for split_ds in [dm.train_dataset, dm.val_dataset, dm.test_dataset]:
+                dev = split_ds.all_c2w.device
+                split_ds.all_c2w[:, :3, 3] = (
+                    renorm_ratio * split_ds.all_c2w[:, :3, 3] + renorm_offset.to(dev)
+                )
+                split_ds.scene_center = new_center
+                split_ds.scale_factor = new_scale
+            rank_zero_info(f"[TwoPhase] Cameras renormalized P1->P2 (scale_ratio={renorm_ratio:.6f})")
 
             # ---- PHASE 2: fresh model, full training with scaled albedos ----
             rank_zero_info(f"[TwoPhase] Phase 2: {total_steps} steps, fresh model, rendering loss active")

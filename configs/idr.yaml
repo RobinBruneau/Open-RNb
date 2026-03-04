@@ -82,6 +82,8 @@ system:
     enabled: null           # null = auto (enabled when albedos are present)
     warmup_ratio: 0.1       # Fraction of total max_steps for phase 1
     n_samples: 2000         # Samples per view for ratio computation
+    intermediate_mesh_resolution: 512
+    sphere_scale_p2: 1.5    # Fill model sphere radius for phase 2
   loss:
     lambda_rendering_mse: 0.
     lambda_rendering_l1: 10.
