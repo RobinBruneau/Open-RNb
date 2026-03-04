@@ -48,16 +48,6 @@ python -c "import tinycudann; print('OK')"
 
 If `pip install "git+https://..."` fails with `ModuleNotFoundError: No module named 'pkg_resources'`, use the manual clone + `setup.py install` method above.
 
-## Optional: pyalicevision
-
-For direct SfM loading from Meshroom (without JSON fallback):
-
-```bash
-pip install pyalicevision
-```
-
-Not required — the code falls back to JSON parsing automatically.
-
 ## Verify installation
 
 ```bash

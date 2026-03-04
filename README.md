@@ -1,9 +1,33 @@
-# RNb-NeuS
+<div align="center">
+<h1>RNb-NeuS &mdash; Open-Source Implementation</h1>
+<h3>Reflectance and Normal-based Multi-View 3D Reconstruction</h3>
 
-Neural surface reconstruction from multi-view normal and reflectance maps.
-Based on [Instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl) with
-[NeuS](https://lingjie0206.github.io/papers/NeuS/) as the underlying SDF
-representation.
+<p>
+<b>A fully open-source reimplementation of
+<a href="https://robinbruneau.github.io/publications/rnb_neus2.html">RNb-NeuS2</a></b><br>
+No proprietary CUDA libraries &mdash; runs out of the box with standard PyTorch + tiny-cuda-nn.
+</p>
+
+[**Baptiste Brument**](https://bbrument.github.io/)<sup><span>&#9733;</span></sup> · [**Robin Bruneau**](https://robinbruneau.github.io/)<sup><span>&#9733;</span></sup>
+<br>
+[**Yvain Quéau**](https://yqueau.github.io/) · [**Jean Mélou**](https://www.irit.fr/~Jean.Melou/) · [**François Lauze**](https://loutchoa.github.io/) · [**Jean-Denis Durou**](https://www.irit.fr/~Jean-Denis.Durou/) · [**Lilian Calvet**](https://scholar.google.com/citations?user=6JewdrMAAAAJ&hl=en)
+
+<span>&#9733;</span> corresponding authors
+
+<div style="display: flex; gap: 10px; justify-content: center; align-items: center;">
+    <a href='https://arxiv.org/abs/2506.04115'><img src='https://img.shields.io/badge/arXiv-RNb--NeuS2-red' alt='Paper PDF' height="30"></a>
+    <a href='https://robinbruneau.github.io/publications/rnb_neus2.html'><img src='https://img.shields.io/badge/Project_Page-RNb--NeuS2-green' alt='Project Page' height="30"></a>
+    <a href='https://robinbruneau.github.io/publications/rnb_neus.html'><img src='https://img.shields.io/badge/Project_Page-RNb--NeuS-blue' alt='Project Page' height="30"></a>
+</div>
+</div>
+
+## Overview
+
+This repository is a **clean, open-source reimplementation** of the [RNb-NeuS2](https://robinbruneau.github.io/publications/rnb_neus2.html) method.
+
+**RNb-NeuS** reconstructs high-quality 3D surfaces from multi-view normal and reflectance (albedo) maps estimated by photometric stereo methods such as [SDM-UniPS](https://github.com/satoshi-ikehata/SDM-UniPS-CVPR2023/) and [Uni-MS-PS](https://github.com/Clement-Hardy/Uni-MS-PS).
+
+Built on [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl) with [NeuS](https://lingjie0206.github.io/papers/NeuS/) as the underlying signed distance function (SDF) representation, the method combines normal supervision with a two-phase albedo scaling pipeline to produce accurate geometry even when per-view reflectance maps have inconsistent scales.
 
 ## Features
 
@@ -112,9 +136,10 @@ Tests mock CUDA dependencies and run on CPU.
 - [RNb-NeuS2](https://robinbruneau.github.io/publications/rnb_neus2.html)
 
 ```bibtex
-@misc{Bruneau25,
+@article{Bruneau25,
     title={{Multi-view Surface Reconstruction Using Normal and Reflectance Cues}},
     author={Robin Bruneau and Baptiste Brument and Yvain Qu{\'e}au and Jean M{\'e}lou and Fran{\c{c}}ois Bernard Lauze and Jean-Denis Durou and Lilian Calvet},
+    journal={International Journal of Computer Vision (IJCV)},
     year={2025},
     eprint={2506.04115},
     archivePrefix={arXiv},
