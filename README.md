@@ -29,12 +29,24 @@ This repository is a **clean, open-source reimplementation** of the [RNb-NeuS2](
 
 Built on [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl) with [NeuS](https://lingjie0206.github.io/papers/NeuS/) as the underlying signed distance function (SDF) representation, the method combines normal supervision with a two-phase albedo scaling pipeline to produce accurate geometry even when per-view reflectance maps have inconsistent scales.
 
+## DOPAMIn / Programme OPEN
+
+This project is developed as part of [**DOPAMIn**](https://www.cnrsinnovation.com/actualite/une-seconde-promotion-pour-le-programme-open-7-nouveaux-logiciels-scientifiques-a-valoriser/) (*Diffusion Open de Photogrammétrie par AliceVision/Meshroom pour l'Industrie*), a project selected in the 2024 cohort of the [**OPEN**](https://www.cnrsinnovation.com/open/) programme run by [CNRS Innovation](https://www.cnrsinnovation.com/).
+
+**OPEN** is a CNRS programme that supports the valorization of open-source scientific software by providing dedicated developer resources, governance expertise, and industry partnership support. DOPAMIn aims to strengthen the [AliceVision](https://alicevision.org/)/[Meshroom](https://alicevision.org/#meshroom) photogrammetry ecosystem, a 3D reconstruction pipeline with over 2 million downloads used in visual effects, archaeology, biology, and industrial inspection.
+
+**Lead researcher:** [Jean-Denis Durou](https://www.irit.fr/~Jean-Denis.Durou/), [IRIT](https://www.irit.fr/) (CNRS / Université Toulouse III &ndash; Paul Sabatier)
+
 ## Features
 
 - Two dataset backends: **IDR** (cameras.npz) and **SfM** (Meshroom / AliceVision JSON)
 - Two-phase training with automatic albedo scaling
 - Scene normalization: `scale_mat`, point cloud, silhouette, camera, or `auto`
 - PLY mesh export with optional vertex colors
+
+## Meshroom Plugin
+
+A ready-to-use [Meshroom](https://alicevision.org/#meshroom) plugin is available at [**meshroomHub/mrRNbNeuS**](https://github.com/meshroomHub/mrRNbNeuS/). It wraps RNb-NeuS as a native Meshroom node so you can integrate neural surface reconstruction directly into your photogrammetry pipeline without command-line usage.
 
 ## Requirements
 
@@ -159,7 +171,7 @@ Tests mock CUDA dependencies and run on CPU.
 }
 ```
 
-- [Instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl)
+- [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl)
 
 ```bibtex
 @misc{instant-nsr-pl,
