@@ -133,6 +133,9 @@ class NeRFSystem(BaseSystem):
         pass
     """
     
+    def on_validation_epoch_start(self):
+        self._validation_outputs = []
+
     def validation_step(self, batch, batch_idx):
         out = self(batch)
         psnr = self.criterions['psnr'](out['comp_rgb'].to(batch['rgb']), batch['rgb'])
@@ -143,34 +146,17 @@ class NeRFSystem(BaseSystem):
             {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {}},
             {'type': 'grayscale', 'img': out['opacity'].view(H, W), 'kwargs': {'cmap': None, 'data_range': (0, 1)}}
         ])
-        return {
-            'psnr': psnr,
-            'index': batch['index']
-        }
-          
-    
-    """
-    # aggregate outputs from different devices when using DP
-    def validation_step_end(self, out):
-        pass
-    """
-    
-    def validation_epoch_end(self, out):
-        out = self.all_gather(out)
-        if self.trainer.is_global_zero:
-            out_set = {}
-            for step_out in out:
-                # DP
-                if step_out['index'].ndim == 1:
-                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr']}
-                # DDP
-                else:
-                    for oi, index in enumerate(step_out['index']):
-                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
-            psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
-            self.log('val/psnr', psnr, prog_bar=True, rank_zero_only=True)         
+        step_out = {'psnr': psnr, 'index': batch['index']}
+        self._validation_outputs.append(step_out)
+        return step_out
 
-    def test_step(self, batch, batch_idx):  
+    def on_validation_epoch_end(self):
+        self._aggregate_psnr(self._validation_outputs, 'val')
+
+    def on_test_epoch_start(self):
+        self._test_outputs = []
+
+    def test_step(self, batch, batch_idx):
         out = self(batch)
         psnr = self.criterions['psnr'](out['comp_rgb'].to(batch['rgb']), batch['rgb'])
         W, H = self.dataset.img_wh
@@ -180,34 +166,22 @@ class NeRFSystem(BaseSystem):
             {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {}},
             {'type': 'grayscale', 'img': out['opacity'].view(H, W), 'kwargs': {'cmap': None, 'data_range': (0, 1)}}
         ])
-        return {
-            'psnr': psnr,
-            'index': batch['index']
-        }      
-    
-    def test_epoch_end(self, out):
-        out = self.all_gather(out)
-        if self.trainer.is_global_zero:
-            out_set = {}
-            for step_out in out:
-                # DP
-                if step_out['index'].ndim == 1:
-                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr']}
-                # DDP
-                else:
-                    for oi, index in enumerate(step_out['index']):
-                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
-            psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
-            self.log('test/psnr', psnr, prog_bar=True, rank_zero_only=True)    
+        step_out = {'psnr': psnr, 'index': batch['index']}
+        self._test_outputs.append(step_out)
+        return step_out
 
+    def on_test_epoch_end(self):
+        self._aggregate_psnr(self._test_outputs, 'test')
+
+        if self.trainer.is_global_zero:
             self.save_img_sequence(
                 f"it{self.global_step}-test",
                 f"it{self.global_step}-test",
-                '(\d+)\.png',
+                r'(\d+)\.png',
                 save_format='mp4',
                 fps=30
             )
-            
+
             self.export()
 
     def export(self):

@@ -1,0 +1,155 @@
+{
+  "version": [
+    "1",
+    "2",
+    "13"
+  ],
+  "views": [
+    {
+      "viewId": "46483756",
+      "poseId": "46483756",
+      "intrinsicId": "1555508705",
+      "path": "/home/bbrument/dev/RNb-NeuS_license_free/tests/data/golden_snail_mini/view_00_normals.png",
+      "width": "32",
+      "height": "28",
+      "metadata": {
+        "oiio:ColorSpace": "sRGB"
+      }
+    },
+    {
+      "viewId": "479365573",
+      "poseId": "479365573",
+      "intrinsicId": "1555508705",
+      "path": "/home/bbrument/dev/RNb-NeuS_license_free/tests/data/golden_snail_mini/view_01_normals.png",
+      "width": "32",
+      "height": "28",
+      "metadata": {
+        "oiio:ColorSpace": "sRGB"
+      }
+    },
+    {
+      "viewId": "676752860",
+      "poseId": "676752860",
+      "intrinsicId": "1555508705",
+      "path": "/home/bbrument/dev/RNb-NeuS_license_free/tests/data/golden_snail_mini/view_02_normals.png",
+      "width": "32",
+      "height": "28",
+      "metadata": {
+        "oiio:ColorSpace": "sRGB"
+      }
+    }
+  ],
+  "intrinsics": [
+    {
+      "intrinsicId": "1555508705",
+      "width": "32",
+      "height": "28",
+      "sensorWidth": "36",
+      "sensorHeight": "29.675676345825195",
+      "serialNumber": "",
+      "type": "pinhole",
+      "initializationMode": "unknown",
+      "initialFocalLength": "-1",
+      "focalLength": "95.349762517199608",
+      "pixelRatio": "1",
+      "pixelRatioLocked": "true",
+      "offsetLocked": "false",
+      "scaleLocked": "false",
+      "principalPoint": [
+        "6.943336250236447",
+        "-12.568736325635596"
+      ],
+      "distortionInitializationMode": "none",
+      "distortionParams": "",
+      "undistortionOffset": [
+        "0",
+        "0"
+      ],
+      "undistortionParams": "",
+      "distortionType": "none",
+      "undistortionType": "none",
+      "locked": "false"
+    }
+  ],
+  "poses": [
+    {
+      "poseId": "46483756",
+      "pose": {
+        "transform": {
+          "rotation": [
+            "0.68264673294937228",
+            "0.10810065385960103",
+            "-0.72270857655674403",
+            "-0.00072087957052946461",
+            "0.98909676447149619",
+            "0.14726530767516943",
+            "0.73074819077859732",
+            "-0.10000919531295233",
+            "0.67528160239018997"
+          ],
+          "center": [
+            "0.78163378069107092",
+            "-1.3092122554939281",
+            "0.13184130673710048"
+          ]
+        },
+        "locked": "false",
+        "rotationOnly": "false",
+        "removable": "true"
+      }
+    },
+    {
+      "poseId": "479365573",
+      "pose": {
+        "transform": {
+          "rotation": [
+            "0.97063960293869633",
+            "0.017234310613847115",
+            "-0.23992027789387671",
+            "-0.00065440247392837723",
+            "0.99761542860766517",
+            "0.069014696705456888",
+            "0.24053759158271232",
+            "-0.066831393383719823",
+            "0.9683363216847638"
+          ],
+          "center": [
+            "-0.57558184120841371",
+            "-1.0856258172798812",
+            "-0.80011046422861276"
+          ]
+        },
+        "locked": "false",
+        "rotationOnly": "false",
+        "removable": "true"
+      }
+    },
+    {
+      "poseId": "676752860",
+      "pose": {
+        "transform": {
+          "rotation": [
+            "0.84057937338836752",
+            "0.28246358395269594",
+            "-0.46221276569845821",
+            "0.0015288927369498943",
+            "0.85204110748419981",
+            "0.52347264842023733",
+            "0.54168623715303932",
+            "-0.44072698453543413",
+            "0.7157763237082414"
+          ],
+          "center": [
+            "-0.0012970938780318964",
+            "-2.3783982364120542",
+            "0.066367692536515532"
+          ]
+        },
+        "locked": "false",
+        "rotationOnly": "false",
+        "removable": "true"
+      }
+    }
+  ],
+  "structure": []
+}

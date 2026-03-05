@@ -9,6 +9,7 @@ import models
 from models.base import BaseModel
 from models.utils import scale_anything, get_activation, cleanup, chunk_batch
 from models.network_utils import get_encoding, get_mlp, get_encoding_with_network
+from datasets.utils import SPACE_WORLD, SPACE_NORMALIZED
 from utils.misc import get_rank
 from systems.utils import update_module_step
 from nerfacc import ContractionType
@@ -76,6 +77,8 @@ class BaseImplicitGeometry(BaseModel):
             self.helper = MarchingCubeHelper(self.config.isosurface.resolution, use_torch=self.config.isosurface.method=='mc-torch')
         self.radius = self.config.radius
         self.contraction_type = None # assigned in system
+        self.register_buffer('scene_center', torch.zeros(3))
+        self.register_buffer('scale_factor', torch.ones(1))
 
     def forward_level(self, points):
         raise NotImplementedError
@@ -101,7 +104,16 @@ class BaseImplicitGeometry(BaseModel):
         return mesh
 
     @torch.no_grad()
-    def isosurface(self):
+    def isosurface(self, space: str = SPACE_WORLD):
+        """Extract isosurface mesh.
+
+        Args:
+            space: SPACE_WORLD      — transform vertices back to world coordinates
+                                      (inverse-scaling applied, default behaviour).
+                   SPACE_NORMALIZED — return vertices in the normalized training space
+                                      (no inverse-scaling), useful for phase-1 export
+                                      when the caller needs to work in normalized space.
+        """
         if self.config.isosurface is None:
             raise NotImplementedError
         mesh_coarse = self.isosurface_((-self.radius, -self.radius, -self.radius), (self.radius, self.radius, self.radius))
@@ -109,7 +121,12 @@ class BaseImplicitGeometry(BaseModel):
         vmin_ = (vmin - (vmax - vmin) * 0.1).clamp(-self.radius, self.radius)
         vmax_ = (vmax + (vmax - vmin) * 0.1).clamp(-self.radius, self.radius)
         mesh_fine = self.isosurface_(vmin_, vmax_)
-        return mesh_fine 
+        if space == SPACE_WORLD:
+            # Transform mesh from normalized space back to world coordinates
+            if self.scale_factor.item() != 1.0 or self.scene_center.abs().sum().item() > 0:
+                dev = mesh_fine['v_pos'].device
+                mesh_fine['v_pos'] = mesh_fine['v_pos'] / self.scale_factor.to(dev) + self.scene_center.to(dev)
+        return mesh_fine
 
 
 @models.register('volume-density')

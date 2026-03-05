@@ -1,3 +1,4 @@
+import torch
 import pytorch_lightning as pl
 
 import models
@@ -56,17 +57,17 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         self.preprocess_data(batch, 'train')
         update_module_step(self.model, self.current_epoch, self.global_step)
     
-    def on_validation_batch_start(self, batch, batch_idx, dataloader_idx):
+    def on_validation_batch_start(self, batch, batch_idx, dataloader_idx=0):
         self.dataset = self.trainer.datamodule.val_dataloader().dataset
         self.preprocess_data(batch, 'validation')
         update_module_step(self.model, self.current_epoch, self.global_step)
-    
-    def on_test_batch_start(self, batch, batch_idx, dataloader_idx):
+
+    def on_test_batch_start(self, batch, batch_idx, dataloader_idx=0):
         self.dataset = self.trainer.datamodule.test_dataloader().dataset
         self.preprocess_data(batch, 'test')
         update_module_step(self.model, self.current_epoch, self.global_step)
 
-    def on_predict_batch_start(self, batch, batch_idx, dataloader_idx):
+    def on_predict_batch_start(self, batch, batch_idx, dataloader_idx=0):
         self.dataset = self.trainer.datamodule.predict_dataloader().dataset
         self.preprocess_data(batch, 'predict')
         update_module_step(self.model, self.current_epoch, self.global_step)
@@ -95,22 +96,36 @@ class BaseSystem(pl.LightningModule, SaverMixin):
         pass
     """
     
-    def validation_epoch_end(self, out):
+    def on_validation_epoch_end(self):
         """
         Gather metrics from all devices, compute mean.
         Purge repeated results using data index.
         """
         raise NotImplementedError
 
-    def test_step(self, batch, batch_idx):        
+    def test_step(self, batch, batch_idx):
         raise NotImplementedError
-    
-    def test_epoch_end(self, out):
+
+    def on_test_epoch_end(self):
         """
         Gather metrics from all devices, compute mean.
         Purge repeated results using data index.
         """
         raise NotImplementedError
+
+    def _aggregate_psnr(self, outputs, metric_prefix):
+        """Gather PSNR outputs from all devices, deduplicate by index, log mean."""
+        out = self.all_gather(outputs)
+        if self.trainer.is_global_zero:
+            out_set = {}
+            for step_out in out:
+                if step_out['index'].ndim == 1:
+                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr']}
+                else:
+                    for oi, index in enumerate(step_out['index']):
+                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
+            psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
+            self.log(f'{metric_prefix}/psnr', psnr, prog_bar=True, rank_zero_only=True)
 
     def export(self):
         raise NotImplementedError

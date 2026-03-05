@@ -91,6 +91,17 @@ class NeuSSystem(BaseSystem):
         self.train_num_samples = self.config.model.train_num_rays * (self.config.model.num_samples_per_ray + self.config.model.get('num_samples_per_ray_bg', 0))
         self.train_num_rays = self.config.model.train_num_rays
 
+    def on_fit_start(self):
+        """Propagate scene scaling from dataset to geometry for inverse scaling at export.
+        Runs unconditionally — any sfm dataset needs inverse scaling, even without albedo scaling."""
+        import torch
+        ds = self.trainer.datamodule.train_dataset
+        if hasattr(ds, 'scale_factor'):
+            self.model.geometry.scene_center.copy_(
+                torch.tensor(ds.scene_center, dtype=torch.float32))
+            self.model.geometry.scale_factor.fill_(ds.scale_factor)
+            rank_zero_info(f"[NeuS] Scene scaling propagated: center={ds.scene_center}, scale={ds.scale_factor}")
+
     def forward(self, batch):
         return self.model(batch['rays'],batch['lights'])
     
@@ -276,8 +287,10 @@ class NeuSSystem(BaseSystem):
 
         # update train_num_rays
         if self.config.model.dynamic_ray_sampling:
-            train_num_rays = int(self.train_num_rays * (self.train_num_samples / out['num_samples_full'].sum().item()))        
-            self.train_num_rays = min(int(self.train_num_rays * 0.9 + train_num_rays * 0.1), self.config.model.max_train_num_rays)
+            num_samples_full = out['num_samples_full'].sum().item()
+            if num_samples_full > 0:
+                train_num_rays = int(self.train_num_rays * (self.train_num_samples / num_samples_full))
+                self.train_num_rays = min(int(self.train_num_rays * 0.9 + train_num_rays * 0.1), self.config.model.max_train_num_rays)
 
         '''
         # depth scale-invariant loss
@@ -409,6 +422,9 @@ class NeuSSystem(BaseSystem):
         pass
     """
     
+    def on_validation_epoch_start(self):
+        self._validation_outputs = []
+
     def validation_step(self, batch, batch_idx):
         out = self(batch)
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
@@ -423,21 +439,20 @@ class NeuSSystem(BaseSystem):
         if 'depths' in batch:
             depths = batch['depths'].clone().view(H, W)
             depths[depths == depths.max()] = 0.0
-        self.save_image_grid(f"it{self.global_step}-{batch['index'][0].item()}.png", [[
-            {'type': 'rgb', 'img': batch['rendering'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': batch['normals'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
-        ],[
-            {'type': 'rgb', 'img': rendering.view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': rgb.view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}},
-        ]])
-        #print(batch['depths'].max(), batch['depths'].min(), out['depth'].max(), out['depth'].min())
+        if self.config.system.get('save_images', True):
+            self.save_image_grid(f"it{self.global_step}-{batch['index'][0].item()}.png", [[
+                {'type': 'rgb', 'img': batch['rendering'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+                {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+                {'type': 'rgb', 'img': batch['normals'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
+            ],[
+                {'type': 'rgb', 'img': rendering.view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+                {'type': 'rgb', 'img': rgb.view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+                {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}},
+            ]])
 
-        return {
-            'psnr': psnr,
-            'index': batch['index']
-        }
+        step_out = {'psnr': psnr, 'index': batch['index']}
+        self._validation_outputs.append(step_out)
+        return step_out
           
     
     """
@@ -446,69 +461,40 @@ class NeuSSystem(BaseSystem):
         pass
     """
     
-    def validation_epoch_end(self, out):
-        out = self.all_gather(out)
-        if self.trainer.is_global_zero:
-            out_set = {}
-            for step_out in out:
-                # DP
-                if step_out['index'].ndim == 1:
-                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr']}
-                # DDP
-                else:
-                    for oi, index in enumerate(step_out['index']):
-                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
-            psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
-            self.log('val/psnr', psnr, prog_bar=True, rank_zero_only=True)         
+    def on_validation_epoch_end(self):
+        self._aggregate_psnr(self._validation_outputs, 'val')
+
+    def on_test_epoch_start(self):
+        self._test_outputs = []
 
     def test_step(self, batch, batch_idx):
-        
         out = self(batch)
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
         W, H = self.dataset.img_wh
-        if self.config.system.render_all_lights :
-
+        if self.config.system.render_all_lights and self.config.system.get('save_images', True):
             self.save_image_grid(f"it{self.global_step}-test/{batch['index'][0].item()}_{batch['index_light'][0].item()}.png", [[
-            {'type': 'rgb', 'img': batch['rendering'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': batch['normals'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
-        ],[
-            {'type': 'rgb', 'img': out['comp_rendering'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': out['comp_rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
-            {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}},
-        ]])
-        
-        return {
-            'psnr': psnr,
-            'index': batch['index']
-        }
-              
-    
-    def test_epoch_end(self, out):
-        """
-        Synchronize devices.
-        Generate image sequence using test outputs.
-        """
-        
-        out = self.all_gather(out)
-        if self.trainer.is_global_zero:
-            out_set = {}
-            for step_out in out:
-                # DP
-                if step_out['index'].ndim == 1:
-                    out_set[step_out['index'].item()] = {'psnr': step_out['psnr']}
-                # DDP
-                else:
-                    for oi, index in enumerate(step_out['index']):
-                        out_set[index[0].item()] = {'psnr': step_out['psnr'][oi]}
-            psnr = torch.mean(torch.stack([o['psnr'] for o in out_set.values()]))
-            self.log('test/psnr', psnr, prog_bar=True, rank_zero_only=True)    
+                {'type': 'rgb', 'img': batch['rendering'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+                {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+                {'type': 'rgb', 'img': batch['normals'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
+            ],[
+                {'type': 'rgb', 'img': out['comp_rendering'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+                {'type': 'rgb', 'img': out['comp_rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+                {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}},
+            ]])
 
+        step_out = {'psnr': psnr, 'index': batch['index']}
+        self._test_outputs.append(step_out)
+        return step_out
+
+    def on_test_epoch_end(self):
+        self._aggregate_psnr(self._test_outputs, 'test')
+
+        if self.trainer.is_global_zero:
             self.export()
     
     def export(self):
         mesh = self.model.export(self.config.export)
         self.save_mesh(
-            f"it{self.global_step}-{self.config.model.geometry.isosurface.method}{self.config.model.geometry.isosurface.resolution}.obj",
+            f"it{self.global_step}-{self.config.model.geometry.isosurface.method}{self.config.model.geometry.isosurface.resolution}.ply",
             **mesh
         )        
