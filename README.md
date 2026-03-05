@@ -39,7 +39,7 @@ Built on [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl) with [NeuS
 
 ## Meshroom Plugin
 
-A ready-to-use [Meshroom](https://github.com/alicevision/Meshroom) plugin is available at [**meshroomHub/mrRNbNeuS**](https://github.com/meshroomHub/mrRNbNeuS/). It wraps RNb-NeuS as a native Meshroom node so you can integrate neural surface reconstruction directly into your photogrammetry pipeline without command-line usage.
+A ready-to-use [Meshroom](https://github.com/alicevision/Meshroom) plugin is available at [**meshroomHub/mrOpenRNb**](https://github.com/meshroomHub/mrOpenRNb). It wraps Open-RNb as a native Meshroom node so you can integrate neural surface reconstruction directly into your photogrammetry pipeline without command-line usage.
 
 ## Requirements
 
