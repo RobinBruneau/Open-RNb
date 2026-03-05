@@ -91,8 +91,12 @@ class TestLoadSfmJson:
     def test_image_paths_exist(self):
         from datasets.sfm import load_sfm_json
         cameras, _ = load_sfm_json(NORMAL_SFM)
+        tests_dir = os.path.join(ROOT, "tests")
         for cam in cameras:
-            assert os.path.isfile(cam["image_path"]), f"Missing: {cam['image_path']}"
+            p = cam["image_path"]
+            if not os.path.isabs(p):
+                p = os.path.join(tests_dir, p)
+            assert os.path.isfile(p), f"Missing: {cam['image_path']}"
 
 
 # ---- View matching ----

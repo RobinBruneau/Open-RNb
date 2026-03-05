@@ -1,4 +1,4 @@
-"""Scene normalization utilities for RNb-NeuS datasets.
+"""Scene normalization utilities for Open-RNb datasets.
 
 All functions are numpy-only (no torch, no PyTorch Lightning).
 """
