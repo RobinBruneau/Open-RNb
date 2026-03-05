@@ -13,4 +13,4 @@ def make(name, config):
     return dataset
 
 
-from . import idr, sfm
+from . import rnb, sfm

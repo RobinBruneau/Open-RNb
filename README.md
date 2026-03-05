@@ -32,7 +32,7 @@ Built on [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl) with [NeuS
 
 ## Features
 
-- Two dataset backends: **IDR** (cameras.npz) and **SfM** (Meshroom / AliceVision JSON)
+- Two dataset backends: **RNb** (cameras.npz) and **SfM** (Meshroom / AliceVision JSON)
 - Two-phase training with automatic albedo scaling
 - Scene normalization: `scale_mat`, `point_cloud`, `silhouette`, `camera`, or `auto`
 - PLY mesh export with optional vertex colors
@@ -51,7 +51,7 @@ See [docs/install.md](docs/install.md) for detailed setup instructions.
 
 ## Data
 
-### IDR format (cameras.npz)
+### RNb format (cameras.npz)
 
 ```
 data/<scene>/
@@ -82,8 +82,8 @@ dataset:
 ### Single command
 
 ```bash
-# IDR dataset
-python launch.py --config configs/idr.yaml --gpu 0 --train \
+# RNb dataset
+python launch.py --config configs/rnb.yaml --gpu 0 --train \
     dataset.scene=golden_snail \
     dataset.root_dir=./data/golden_snail
 
@@ -120,7 +120,7 @@ system:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `trainer.max_steps` | 20000 | Total training iterations |
-| `dataset.scaling_mode` | `auto` (SfM) / `scale_mat` (IDR) | Scene normalization method |
+| `dataset.scaling_mode` | `auto` (SfM) / `scale_mat` (RNb) | Scene normalization method |
 | `dataset.sphere_scale` | 1.0 | Phase 1 bounding sphere radius |
 | `model.geometry.isosurface.resolution` | 512 | Marching cubes grid resolution |
 | `system.save_images` | false | Save validation/test images |

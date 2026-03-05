@@ -48,9 +48,9 @@ def scale_camera_intrinsics(cameras, factor):
 
 
 def compute_scaling_from_scale_mat(scale_mat_0):
-    """Extract (scene_center, scale_factor) from a scale_mat (IDR/cameras.npz format).
+    """Extract (scene_center, scale_factor) from a scale_mat (RNb/cameras.npz format).
 
-    IDR scale_mat convention:
+    RNb scale_mat convention:
         p_norm = s * p_world + t   =>   p_world = (p_norm - t) / s
 
     so:  scene_center = -t / s,   scale_factor = s
@@ -229,7 +229,7 @@ def compute_scene_scaling(scaling_mode, sphere_scale, scale_mat=None, pcd=None,
 
     Args:
         scaling_mode: one of:
-            'scale_mat'   — use IDR-style scale_mat (requires scale_mat arg).
+            'scale_mat'   — use RNb-style scale_mat (requires scale_mat arg).
             'pcd'         — use 3D point cloud (requires pcd arg).
             'silhouettes' — use per-view silhouettes (requires cameras + masks).
             'cameras'     — use camera centres as a point cloud.

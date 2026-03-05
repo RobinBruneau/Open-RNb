@@ -30,7 +30,7 @@ class TestComputeScalingFromScaleMat:
     def _make_scale_mat(self, s, center):
         """Build a 4x4 scale_mat encoding p_norm = s*(p_world - center).
 
-        IDR convention: scale_mat encodes  p_norm = s*p_world + t
+        RNb convention: scale_mat encodes  p_norm = s*p_world + t
         with t = -s * center, so p_world = (p_norm - t) / s = p_norm/s + center.
         scene_center = -t/s = center, scale_factor = s.
         """

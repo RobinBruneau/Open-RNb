@@ -54,12 +54,21 @@ def load_sfm_pyalicevision(sfm_path):
 
 def load_sfm_json(sfm_path):
     """Fallback: parse .sfm/.json file directly (no pyalicevision needed)."""
+    sfm_dir = os.path.dirname(os.path.abspath(sfm_path))
     with open(sfm_path, 'r') as f:
         data = json.load(f)
-    return _parse_sfm_json_data(data)
+    return _parse_sfm_json_data(data, sfm_dir=sfm_dir)
 
 
-def _parse_sfm_json_data(data):
+def _resolve_path(path, sfm_dir):
+    """Resolve a path from an SfM JSON file. Absolute paths pass through;
+    relative paths are resolved against *sfm_dir*."""
+    if not path or os.path.isabs(path) or sfm_dir is None:
+        return path
+    return os.path.join(sfm_dir, path)
+
+
+def _parse_sfm_json_data(data, sfm_dir=None):
     """Parse SfM JSON dict into standardized camera list + landmarks.
 
     Returns:
@@ -118,7 +127,7 @@ def _parse_sfm_json_data(data):
         cameras.append({
             'view_id': view_id,
             'pose_id': pose_id,
-            'image_path': view.get('path', ''),
+            'image_path': _resolve_path(view.get('path', ''), sfm_dir),
             'R_cam2world': R_cam2world,
             'center': center,
             'fx': fx, 'fy': fy, 'cx': cx, 'cy': cy,

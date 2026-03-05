@@ -1,9 +1,9 @@
-name: idr-${dataset.scene}
+name: rnb-${dataset.scene}
 tag: ""
 seed: 42
 
 dataset:
-  name: idr
+  name: rnb
   scene: ???
   root_dir: ./data/${dataset.scene}
   img_downscale: 1.0
