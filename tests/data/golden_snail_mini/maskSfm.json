@@ -9,7 +9,7 @@
       "viewId": "46483756",
       "poseId": "46483756",
       "intrinsicId": "1555508705",
-      "path": "/home/bbrument/dev/RNb-NeuS_license_free/tests/data/golden_snail_mini/view_00_mask.png",
+      "path": "/home/bbrument/dev/Open-RNb/tests/data/golden_snail_mini/view_00_mask.png",
       "width": "32",
       "height": "28",
       "metadata": {
@@ -20,7 +20,7 @@
       "viewId": "479365573",
       "poseId": "479365573",
       "intrinsicId": "1555508705",
-      "path": "/home/bbrument/dev/RNb-NeuS_license_free/tests/data/golden_snail_mini/view_01_mask.png",
+      "path": "/home/bbrument/dev/Open-RNb/tests/data/golden_snail_mini/view_01_mask.png",
       "width": "32",
       "height": "28",
       "metadata": {
@@ -31,7 +31,7 @@
       "viewId": "676752860",
       "poseId": "676752860",
       "intrinsicId": "1555508705",
-      "path": "/home/bbrument/dev/RNb-NeuS_license_free/tests/data/golden_snail_mini/view_02_mask.png",
+      "path": "/home/bbrument/dev/Open-RNb/tests/data/golden_snail_mini/view_02_mask.png",
       "width": "32",
       "height": "28",
       "metadata": {

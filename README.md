@@ -1,6 +1,7 @@
 <div align="center">
-<h1>RNb-NeuS &mdash; Open-Source Implementation</h1>
-<h3>Reflectance and Normal-based Multi-View 3D Reconstruction</h3>
+<h1>Open-RNb</h1>
+<h3>Open-source Reflectance and Normal-based<br>
+Multi-View 3D Reconstruction</h3>
 
 <p>
 <b>A fully open-source reimplementation of
