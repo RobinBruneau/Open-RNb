@@ -135,7 +135,7 @@ def main():
             ds = config.dataset
             if ds.name == 'sfm' and ds.get('albedo_sfm', ''):
                 has_albedos = True
-            elif ds.name == 'idr' and os.path.isdir(os.path.join(ds.root_dir, 'albedo')):
+            elif ds.name == 'rnb' and os.path.isdir(os.path.join(ds.root_dir, 'albedo')):
                 has_albedos = True
             two_phase = has_albedos
         else:

@@ -713,15 +713,15 @@ class TestSphereScaleProportionality:
         )
 
     def test_idr_config_has_sphere_scale_1_0(self):
-        """configs/idr.yaml must declare sphere_scale: 1.0 in the dataset section."""
+        """configs/rnb.yaml must declare sphere_scale: 1.0 in the dataset section."""
         import yaml
-        config_path = os.path.join(ROOT, "configs", "idr.yaml")
+        config_path = os.path.join(ROOT, "configs", "rnb.yaml")
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
         actual = cfg["dataset"].get("sphere_scale")
         assert actual == 1.0, (
-            f"configs/idr.yaml dataset.sphere_scale={actual!r}, expected 1.0. "
-            "Add sphere_scale: 1.0 to the dataset section of configs/idr.yaml."
+            f"configs/rnb.yaml dataset.sphere_scale={actual!r}, expected 1.0. "
+            "Add sphere_scale: 1.0 to the dataset section of configs/rnb.yaml."
         )
 
 

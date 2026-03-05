@@ -123,7 +123,7 @@ def gen_light_directions(c2w,normal=None):
         return light_directions_world
 '''
 
-class IDRDatasetBase():
+class RNbDatasetBase():
     def setup(self, config, split):
         self.config = config
         self.split = split
@@ -181,8 +181,8 @@ class IDRDatasetBase():
         fg_area_ratio = self.config.get('fg_area_ratio', 5.0)
 
         # Collect cameras and masks for non-scale_mat modes
-        idr_cameras_for_scaling = []
-        idr_masks_for_scaling = []
+        rnb_cameras_for_scaling = []
+        rnb_masks_for_scaling = []
 
         for i in range(n_images):
 
@@ -252,12 +252,12 @@ class IDRDatasetBase():
                 # R_cam2world: rotation part of c2w_world (world convention, Y/Z unflipped)
                 R_c2w_world = c2w_world[:3, :3]
                 center_world = c2w_world[:3, 3]
-                idr_cameras_for_scaling.append({
+                rnb_cameras_for_scaling.append({
                     'fx': fx_w, 'fy': fy_w, 'cx': cx_w, 'cy': cy_w,
                     'R_cam2world': R_c2w_world,
                     'center': center_world,
                 })
-                idr_masks_for_scaling.append(mask.numpy())
+                rnb_masks_for_scaling.append(mask.numpy())
 
         if split == 'train' and self.config.get('num_views', False):
             num_views = self.config.num_views
@@ -277,8 +277,8 @@ class IDRDatasetBase():
         self.scene_center, self.scale_factor = compute_scene_scaling(
             scaling_mode, sphere_scale,
             scale_mat=cams['scale_mat_0'] if scaling_mode == SCALE_MAT else None,
-            cameras=idr_cameras_for_scaling if idr_cameras_for_scaling else None,
-            masks=idr_masks_for_scaling if idr_masks_for_scaling else None,
+            cameras=rnb_cameras_for_scaling if rnb_cameras_for_scaling else None,
+            masks=rnb_masks_for_scaling if rnb_masks_for_scaling else None,
             fg_area_ratio=fg_area_ratio,
         )
 
@@ -324,7 +324,7 @@ class IDRDatasetBase():
         self.all_images = scaled_images_tensor.to(self.all_images.device)
 
 
-class IDRDataset(Dataset, IDRDatasetBase):
+class RNbDataset(Dataset, RNbDatasetBase):
     def __init__(self, config, split):
         self.setup(config, split)
 
@@ -349,7 +349,7 @@ class IDRDataset(Dataset, IDRDatasetBase):
             }
 
 
-class IDRIterableDataset(IterableDataset, IDRDatasetBase):
+class RNbIterableDataset(IterableDataset, RNbDatasetBase):
     def __init__(self, config, split):
         self.setup(config, split)
 
@@ -358,21 +358,21 @@ class IDRIterableDataset(IterableDataset, IDRDatasetBase):
             yield {}
 
 
-@datasets.register('idr')
-class IDRDataModule(pl.LightningDataModule):
+@datasets.register('rnb')
+class RNbDataModule(pl.LightningDataModule):
     def __init__(self, config):
         super().__init__()
         self.config = config
     
     def setup(self, stage=None):
         if stage in [None, 'fit'] and not hasattr(self, 'train_dataset'):
-            self.train_dataset = IDRIterableDataset(self.config, self.config.train_split)
+            self.train_dataset = RNbIterableDataset(self.config, self.config.train_split)
         if stage in [None, 'fit', 'validate'] and not hasattr(self, 'val_dataset'):
-            self.val_dataset = IDRDataset(self.config, self.config.val_split)
+            self.val_dataset = RNbDataset(self.config, self.config.val_split)
         if stage in [None, 'test'] and not hasattr(self, 'test_dataset'):
-            self.test_dataset = IDRDataset(self.config, self.config.test_split)
+            self.test_dataset = RNbDataset(self.config, self.config.test_split)
         if stage in [None, 'predict'] and not hasattr(self, 'predict_dataset'):
-            self.predict_dataset = IDRDataset(self.config, self.config.train_split)
+            self.predict_dataset = RNbDataset(self.config, self.config.train_split)
 
     def prepare_data(self):
         pass
