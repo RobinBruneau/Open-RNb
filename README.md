@@ -8,9 +8,9 @@
 No proprietary CUDA libraries &mdash; runs out of the box with standard PyTorch + tiny-cuda-nn.
 </p>
 
-[**Baptiste Brument**](https://bbrument.github.io/)<sup><span>&#9733;</span></sup> · [**Robin Bruneau**](https://robinbruneau.github.io/)<sup><span>&#9733;</span></sup>
+[**Robin Bruneau**](https://robinbruneau.github.io/)<sup><span>&#9733;</span></sup> · [**Baptiste Brument**](https://bbrument.github.io/)<sup><span>&#9733;</span></sup>
 <br>
-[**Yvain Quéau**](https://yqueau.github.io/) · [**Jean Mélou**](https://www.irit.fr/~Jean.Melou/) · [**François Lauze**](https://loutchoa.github.io/) · [**Jean-Denis Durou**](https://www.irit.fr/~Jean-Denis.Durou/) · [**Lilian Calvet**](https://scholar.google.com/citations?user=6JewdrMAAAAJ&hl=en)
+[**Yvain Quéau**](https://yqueau.github.io/) · [**Jean Mélou**](https://www.irit.fr/~Jean.Melou/) · [**François Lauze**](https://loutchoa.github.io/) · [**Jean-Denis Durou**](https://cv.hal.science/jean-denis-durou) · [**Lilian Calvet**](https://scholar.google.com/citations?user=6JewdrMAAAAJ&hl=en)
 
 <span>&#9733;</span> corresponding authors
 
@@ -33,8 +33,12 @@ Built on [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl) with [NeuS
 
 - Two dataset backends: **IDR** (cameras.npz) and **SfM** (Meshroom / AliceVision JSON)
 - Two-phase training with automatic albedo scaling
-- Scene normalization: `scale_mat`, point cloud, silhouette, camera, or `auto`
+- Scene normalization: `scale_mat`, `point_cloud`, `silhouette`, `camera`, or `auto`
 - PLY mesh export with optional vertex colors
+
+## Meshroom Plugin
+
+A ready-to-use [Meshroom](https://github.com/alicevision/Meshroom) plugin is available at [**meshroomHub/mrRNbNeuS**](https://github.com/meshroomHub/mrRNbNeuS/). It wraps RNb-NeuS as a native Meshroom node so you can integrate neural surface reconstruction directly into your photogrammetry pipeline without command-line usage.
 
 ## Requirements
 
@@ -57,9 +61,7 @@ data/<scene>/
 ```
 
 Pre-built datasets (DiLiGenT-MV, LUCES-MV, Skoltech3D) with normals and
-reflectance from [SDM-UniPS](https://github.com/satoshi-ikehata/SDM-UniPS-CVPR2023/)
-and [Uni-MS-PS](https://github.com/Clement-Hardy/Uni-MS-PS) are available on
-[Google Drive](https://drive.google.com/drive/folders/1TbOrB38klLpG41bXzI7B1A01qsbEbz9h?usp=sharing).
+reflectance from [SDM-UniPS](https://github.com/satoshi-ikehata/SDM-UniPS-CVPR2023/) and [Uni-MS-PS](https://github.com/Clement-Hardy/Uni-MS-PS) are available on [Google Drive](https://drive.google.com/drive/folders/1TbOrB38klLpG41bXzI7B1A01qsbEbz9h?usp=sharing).
 
 ### SfM format (Meshroom JSON)
 
@@ -131,12 +133,18 @@ python -m pytest tests/ -v
 
 Tests mock CUDA dependencies and run on CPU.
 
+## Acknowledgements
+
+This work is supported by [**DOPAMIn**](https://www.cnrsinnovation.com/actualite/une-seconde-promotion-pour-le-programme-open-7-nouveaux-logiciels-scientifiques-a-valoriser/) (*Diffusion Open de Photogrammétrie par AliceVision/Meshroom pour l'Industrie*), selected in the 2024 cohort of the [**OPEN**](https://www.cnrsinnovation.com/open/) programme run by [CNRS Innovation](https://www.cnrsinnovation.com/). OPEN supports the valorization of open-source scientific software by providing dedicated developer resources, governance expertise, and industry partnership support.
+
+**Lead researcher:** [Jean-Denis Durou](https://cv.hal.science/jean-denis-durou), [IRIT](https://www.irit.fr/) (INP-Toulouse)
+
 ## Citation
 
 - [RNb-NeuS2](https://robinbruneau.github.io/publications/rnb_neus2.html)
 
 ```bibtex
-@article{Bruneau25,
+@article{bruneau25,
     title={{Multi-view Surface Reconstruction Using Normal and Reflectance Cues}},
     author={Robin Bruneau and Baptiste Brument and Yvain Qu{\'e}au and Jean M{\'e}lou and Fran{\c{c}}ois Bernard Lauze and Jean-Denis Durou and Lilian Calvet},
     journal={International Journal of Computer Vision (IJCV)},
@@ -151,7 +159,7 @@ Tests mock CUDA dependencies and run on CPU.
 - [RNb-NeuS](https://robinbruneau.github.io/publications/rnb_neus.html)
 
 ```bibtex
-@inproceedings{Brument24,
+@inproceedings{brument24,
     title={{RNb-NeuS: Reflectance and Normal-based Multi-View 3D Reconstruction}},
     author={Baptiste Brument and Robin Bruneau and Yvain Qu{\'e}au and Jean M{\'e}lou and Fran{\c{c}}ois Lauze and Jean-Denis Durou and Lilian Calvet},
     booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
@@ -159,7 +167,7 @@ Tests mock CUDA dependencies and run on CPU.
 }
 ```
 
-- [Instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl)
+- [instant-nsr-pl](https://github.com/bennyguo/instant-nsr-pl)
 
 ```bibtex
 @misc{instant-nsr-pl,
