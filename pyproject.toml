@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-rnb"
+version = "1.0.0"
+description = "Open-RNb: neural surface reconstruction from normal maps"
+requires-python = ">=3.10"
+
+dependencies = [
+    "pytorch-lightning<2",
+    "omegaconf==2.2.3",
+    "nerfacc==0.3.3",
+    "matplotlib",
+    "opencv-python",
+    "imageio",
+    "imageio-ffmpeg",
+    "scipy",
+    "PyMCubes",
+    "pyransac3d",
+    "torch_efficient_distloss",
+    "tensorboard",
+    "trimesh[easy]",
+    "psutil",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["models*", "systems*", "utils*", "datasets*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml"]
+
+[tool.setuptools]
+zip-safe = false
+py-modules = ["launch"]
