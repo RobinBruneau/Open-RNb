@@ -27,7 +27,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["models*", "systems*", "utils*", "datasets*"]
+include = ["models*", "systems*", "utils*", "datasets*", "configs*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.yaml"]
