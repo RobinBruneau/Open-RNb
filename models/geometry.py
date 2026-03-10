@@ -117,6 +117,10 @@ class BaseImplicitGeometry(BaseModel):
         if self.config.isosurface is None:
             raise NotImplementedError
         mesh_coarse = self.isosurface_((-self.radius, -self.radius, -self.radius), (self.radius, self.radius, self.radius))
+        if mesh_coarse['v_pos'].numel() == 0:
+            raise RuntimeError(
+                "Isosurface extraction produced an empty mesh (no vertices). "
+                "This usually means the model failed to converge (e.g. NaN loss).")
         vmin, vmax = mesh_coarse['v_pos'].amin(dim=0), mesh_coarse['v_pos'].amax(dim=0)
         vmin_ = (vmin - (vmax - vmin) * 0.1).clamp(-self.radius, self.radius)
         vmax_ = (vmax + (vmax - vmin) * 0.1).clamp(-self.radius, self.radius)

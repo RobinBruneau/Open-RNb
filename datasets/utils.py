@@ -273,18 +273,18 @@ def compute_scene_scaling(scaling_mode, sphere_scale, scale_mat=None, pcd=None,
         return compute_scaling_from_cameras(cameras, sphere_scale)
 
     if scaling_mode == AUTO:
-        # Try pcd first
-        has_pcd = pcd is not None and len(pcd) > 0
-        if has_pcd:
-            return compute_scaling_from_pcd(pcd, sphere_scale)
-
-        # Try silhouettes
+        # Try silhouettes first (more reliable for PS/neural reconstruction)
         has_silhouettes = (cameras is not None and masks is not None
                            and len(cameras) > 0 and len(masks) > 0)
         if has_silhouettes:
             return compute_scaling_from_silhouettes(
                 cameras, masks, sphere_scale=sphere_scale, fg_area_ratio=fg_area_ratio
             )
+
+        # Fall back to pcd
+        has_pcd = pcd is not None and len(pcd) > 0
+        if has_pcd:
+            return compute_scaling_from_pcd(pcd, sphere_scale)
 
         # Fall back to camera centres
         if cameras is not None and len(cameras) > 0:
