@@ -1,4 +1,7 @@
 import os
+
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
+
 import json
 import numpy as np
 from PIL import Image
@@ -17,6 +20,37 @@ from utils.misc import get_rank
 # World coordinate correction (flip Y and Z) — matches pyalicevisionlib convention.
 # AliceVision uses a Y-down/Z-forward native frame; this converts to Y-up world.
 WORLD_CORRECTION = np.diag([1.0, -1.0, -1.0])
+
+
+def _load_image_cv2(path):
+    """Load an image via cv2, supporting PNG (8/16-bit) and EXR (float32).
+
+    Returns:
+        (H, W, C) float32 tensor at native resolution.
+        is_exr: bool indicating if the source was EXR.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise FileNotFoundError(f"Cannot read image: {path}")
+
+    is_exr = (ext == ".exr")
+
+    # Convert to float32
+    if img.dtype == np.uint8:
+        img = img.astype(np.float32) / 255.0
+    elif img.dtype == np.uint16:
+        img = img.astype(np.float32) / 65535.0
+    # float32 (EXR): keep as-is
+
+    # BGR -> RGB
+    if len(img.shape) == 3:
+        if img.shape[2] == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+        elif img.shape[2] == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    return torch.from_numpy(img).float(), is_exr
 
 
 # =============================================================================
@@ -304,33 +338,35 @@ class SfMDatasetBase():
             K = make_K(fx, fy, cx, cy)
             self.camera_Ks.append(K)
 
-            # Load normal image
+            # Load normal image (supports PNG and EXR)
             normal_path = cam['image_path']
-            normals = Image.open(normal_path)
-            normals = normals.resize(self.img_wh, Image.BICUBIC)
-            normals = TF.to_tensor(normals).permute(1, 2, 0)  # (H, W, C)
-            normals = normals.float() * 2.0 - 1.0
+            normals, is_exr = _load_image_cv2(normal_path)
             normals = normals[:, :, :3]
+            if not is_exr:
+                # PNG: [0, 1] -> [-1, 1]
+                normals = normals * 2.0 - 1.0
+            # EXR: already in [-1, 1]
             normals = torch.nn.functional.normalize(normals, p=2, dim=-1)
             # Convert normals to world space
             normals = torch.matmul(normals, c2w_flipped[:3, :3].T)
 
-            # Load albedo image
+            # Load albedo image (supports PNG and EXR/HDR)
             if vid in albedo_by_id:
                 albedo_path = albedo_by_id[vid]['image_path']
                 self.albedo_paths.append(albedo_path)
-                img = Image.open(albedo_path)
-                img = img.resize(self.img_wh, Image.BICUBIC)
-                img = TF.to_tensor(img).permute(1, 2, 0)[..., :3]
+                img, _ = _load_image_cv2(albedo_path)
+                img = img[..., :3]
             else:
                 self.albedo_paths.append(None)
                 img = torch.zeros(h, w, 3)
 
-            # Load mask
+            # Load mask (supports PNG and EXR)
             if vid in mask_by_id:
                 mask_path = mask_by_id[vid]['image_path']
-                mask = Image.open(mask_path).convert('L')
-                mask = TF.to_tensor(mask)[0]
+                mask, _ = _load_image_cv2(mask_path)
+                if mask.ndim == 3:
+                    mask = mask[:, :, 0]
+                mask = (mask > 0.5).float()
             else:
                 mask = torch.ones(h, w)
 
