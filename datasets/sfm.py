@@ -330,7 +330,6 @@ class SfMDatasetBase():
             if vid in mask_by_id:
                 mask_path = mask_by_id[vid]['image_path']
                 mask = Image.open(mask_path).convert('L')
-                mask = mask.resize(self.img_wh, Image.BICUBIC)
                 mask = TF.to_tensor(mask)[0]
             else:
                 mask = torch.ones(h, w)
