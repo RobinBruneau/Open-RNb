@@ -200,11 +200,18 @@ class RNbDatasetBase():
 
             self.camera_Ks.append(make_K(fx, fy, cx, cy))
 
-            img_path = os.path.join(self.config.root_dir, 'albedo', f'{i:0{self._n_digits}d}.png')
-            self.albedo_paths.append(img_path)
-            img = Image.open(img_path)
-            img = img.resize(self.img_wh, Image.BICUBIC)
-            img = TF.to_tensor(img).permute(1, 2, 0)[...,:3]
+            albedo_dir = os.path.join(self.config.root_dir, 'albedo')
+            has_albedo = os.path.isdir(albedo_dir)
+            if has_albedo:
+                img_path = os.path.join(albedo_dir, f'{i:0{self._n_digits}d}.png')
+                self.albedo_paths.append(img_path)
+                img = Image.open(img_path)
+                img = img.resize(self.img_wh, Image.BICUBIC)
+                img = TF.to_tensor(img).permute(1, 2, 0)[..., :3]
+            else:
+                # normals-only: no reflectance supervision, use neutral gray
+                self.albedo_paths.append(None)
+                img = torch.full((self.img_wh[1], self.img_wh[0], 3), 0.5)
 
             mask_path = os.path.join(self.config.root_dir, 'mask', f'{i:0{self._n_digits}d}.png')
             mask = Image.open(mask_path).convert('L') # (H, W, 1)
