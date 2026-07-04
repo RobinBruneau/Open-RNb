@@ -50,22 +50,26 @@ def scale_camera_intrinsics(cameras, factor):
 def compute_scaling_from_scale_mat(scale_mat_0):
     """Extract (scene_center, scale_factor) from a scale_mat (RNb/cameras.npz format).
 
-    RNb scale_mat convention:
-        p_norm = s * p_world + t   =>   p_world = (p_norm - t) / s
+    IDR/NeuS scale_mat convention: scale_mat maps NORMALIZED -> WORLD, i.e.
+        p_world = scale_mat @ p_norm = s * p_norm + t
 
-    so:  scene_center = -t / s,   scale_factor = s
+    The export path (models/geometry.py) reconstructs world coords as
+        p_world = p_norm / scale_factor + scene_center
+    (the same convention used by the pcd/silhouette scaling functions, where
+    scene_center is the WORLD center and scale_factor is the world->norm scale).
+    Matching the two: scale_factor = 1 / s, scene_center = t.
 
     Args:
         scale_mat_0: (4, 4) numpy array — the scale_mat for view 0.
 
     Returns:
-        scene_center: (3,) numpy array
-        scale_factor: float
+        scene_center: (3,) numpy array — world-space scene center.
+        scale_factor: float — world->normalized scale.
     """
-    s = float(scale_mat_0[0, 0])   # uniform scale on diagonal
-    t = scale_mat_0[:3, 3]          # translation column
-    scene_center = (-t / s).astype(np.float64)
-    scale_factor = s
+    s = float(scale_mat_0[0, 0])   # uniform scale on diagonal (norm->world)
+    t = scale_mat_0[:3, 3]          # translation column (world position of norm origin)
+    scene_center = t.astype(np.float64)
+    scale_factor = 1.0 / s
     return scene_center, scale_factor
 
 
