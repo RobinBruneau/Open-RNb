@@ -1,4 +1,7 @@
 import os
+
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
+
 import json
 import math
 import numpy as np
@@ -208,7 +211,6 @@ class RNbDatasetBase():
 
             mask_path = os.path.join(self.config.root_dir, 'mask', f'{i:0{self._n_digits}d}.png')
             mask = Image.open(mask_path).convert('L') # (H, W, 1)
-            mask = mask.resize(self.img_wh, Image.BICUBIC)
             mask = TF.to_tensor(mask)[0]
 
             
