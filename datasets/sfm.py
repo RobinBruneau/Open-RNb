@@ -224,7 +224,11 @@ def cameras_by_view_id(camera_list):
 # =============================================================================
 
 class SfMDatasetBase():
-    def setup(self, config, split):
+    # View data that every split loads identically: loaded once, then shared (see _share_views).
+    SHARED_VIEW_ATTRS = ('all_images', 'all_fg_masks', 'directions', 'all_normals', 'albedo_paths', 'camera_Ks',
+                         'w', 'h', 'img_wh', 'factor', 'scale_factor', 'scene_center')
+
+    def setup(self, config, split, shared=None):
         self.config = config
         self.split = split
         self.rank = get_rank()
@@ -233,6 +237,43 @@ class SfMDatasetBase():
         self.apply_mask = True
         self.apply_light_opti = self.config.apply_light_opti
 
+        if shared is None:
+            self._load_views()
+        else:
+            self._share_views(shared)
+
+        # Subsample views if requested
+        if split == 'train' and self.config.get('num_views', False):
+            num_views = self.config.num_views
+            jump = len(self.all_c2w) // num_views
+            if jump == 0:
+                jump = 1
+            self.all_c2w = self.all_c2w[::jump]
+            self.all_images = self.all_images[::jump]
+            self.all_fg_masks = self.all_fg_masks[::jump]
+            self.all_normals = self.all_normals[::jump]
+            self.albedo_paths = self.albedo_paths[::jump]
+            self.camera_Ks = self.camera_Ks[::jump]
+
+        if self.split == 'test':
+            self.test_render_combinations = []
+            num_base_images = len(self.all_images)
+            num_light_conditions = 3
+            for img_idx in range(num_base_images):
+                for light_idx in range(num_light_conditions):
+                    self.test_render_combinations.append({'image_idx': img_idx, 'light_idx': light_idx})
+            print(f"Test split: Prepared {len(self.test_render_combinations)} image-light combinations for rendering.")
+
+    def _share_views(self, other):
+        """Reuse the views loaded by another split instead of loading another copy on the device
+        (about 40 bytes per pixel). Each split keeps its own camera poses, which the two-phase
+        training renormalizes in place, starting from the poses as loaded."""
+        self._views = other._views
+        for name in self.SHARED_VIEW_ATTRS:
+            setattr(self, name, self._views[name])
+        self.all_c2w = self._views['all_c2w'].clone()
+
+    def _load_views(self):
         # Load normal SfMData (required)
         normal_cameras, landmarks = load_sfm(self.config.normal_sfm)
 
@@ -413,19 +454,6 @@ class SfMDatasetBase():
         self.scale_factor = scene_scale
         self.scene_center = scene_center
 
-        # Subsample views if requested
-        if split == 'train' and self.config.get('num_views', False):
-            num_views = self.config.num_views
-            jump = len(self.all_c2w) // num_views
-            if jump == 0:
-                jump = 1
-            self.all_c2w = self.all_c2w[::jump]
-            self.all_images = self.all_images[::jump]
-            self.all_fg_masks = self.all_fg_masks[::jump]
-            self.all_normals = self.all_normals[::jump]
-            self.albedo_paths = self.albedo_paths[::jump]
-            self.camera_Ks = self.camera_Ks[::jump]
-
         # Stack into tensors
         self.all_c2w = torch.stack(self.all_c2w, dim=0).float().to(self.rank)
         self.all_images = torch.stack(self.all_images, dim=0).float().to(self.rank)
@@ -433,14 +461,9 @@ class SfMDatasetBase():
         self.directions = torch.stack(self.directions, dim=0).float().to(self.rank)
         self.all_normals = torch.stack(self.all_normals, dim=0).float().to(self.rank)
 
-        if self.split == 'test':
-            self.test_render_combinations = []
-            num_base_images = len(self.all_images)
-            num_light_conditions = 3
-            for img_idx in range(num_base_images):
-                for light_idx in range(num_light_conditions):
-                    self.test_render_combinations.append({'image_idx': img_idx, 'light_idx': light_idx})
-            print(f"Test split: Prepared {len(self.test_render_combinations)} image-light combinations for rendering.")
+        # Views shared with the other splits, before any subsampling or pose renormalization
+        self._views = {name: getattr(self, name) for name in self.SHARED_VIEW_ATTRS}
+        self._views['all_c2w'] = self.all_c2w.clone()
 
     def update_albedos(self, scaled_images_tensor):
         """Called by two-phase training to replace albedos in-place."""
@@ -448,8 +471,8 @@ class SfMDatasetBase():
 
 
 class SfMDataset(Dataset, SfMDatasetBase):
-    def __init__(self, config, split):
-        self.setup(config, split)
+    def __init__(self, config, split, shared=None):
+        self.setup(config, split, shared)
 
     def __len__(self):
         if self.split == 'test':
@@ -470,8 +493,8 @@ class SfMDataset(Dataset, SfMDatasetBase):
 
 
 class SfMIterableDataset(IterableDataset, SfMDatasetBase):
-    def __init__(self, config, split):
-        self.setup(config, split)
+    def __init__(self, config, split, shared=None):
+        self.setup(config, split, shared)
 
     def __iter__(self):
         while True:
@@ -489,13 +512,20 @@ class SfMDataModule(pl.LightningDataModule):
         # Critical for two-phase training — stage 2's trainer.fit()
         # calls setup() again, which must NOT overwrite scaled albedos.
         if stage in [None, 'fit'] and not hasattr(self, 'train_dataset'):
-            self.train_dataset = SfMIterableDataset(self.config, self.config.train_split)
+            self.train_dataset = SfMIterableDataset(self.config, self.config.train_split, self._shared_views())
         if stage in [None, 'fit', 'validate'] and not hasattr(self, 'val_dataset'):
-            self.val_dataset = SfMDataset(self.config, self.config.val_split)
+            self.val_dataset = SfMDataset(self.config, self.config.val_split, self._shared_views())
         if stage in [None, 'test'] and not hasattr(self, 'test_dataset'):
-            self.test_dataset = SfMDataset(self.config, self.config.test_split)
+            self.test_dataset = SfMDataset(self.config, self.config.test_split, self._shared_views())
         if stage in [None, 'predict'] and not hasattr(self, 'predict_dataset'):
-            self.predict_dataset = SfMDataset(self.config, self.config.train_split)
+            self.predict_dataset = SfMDataset(self.config, self.config.train_split, self._shared_views())
+
+    def _shared_views(self):
+        """The first dataset created loads the views; the next ones share them (all splits use the same views)."""
+        for name in ('train_dataset', 'val_dataset', 'test_dataset', 'predict_dataset'):
+            if hasattr(self, name):
+                return getattr(self, name)
+        return None
 
     def prepare_data(self):
         pass
